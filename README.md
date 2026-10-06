@@ -10,9 +10,10 @@ the game draws it. No modding experience needed.
 
 ## Download
 
-**[Download the latest version (Linux AppImage)](https://github.com/idiotgamster420/stellaris-custom-flags/releases/latest)**
+**[Download the latest version](https://github.com/idiotgamster420/stellaris-custom-flags/releases/latest)** for Windows or Linux:
 
-One file, nothing else to install. Windows support is planned.
+- **Windows 10/11:** `StellarisFlagUploader-Setup.exe`, a normal installer (no admin rights needed)
+- **Linux:** `Stellaris_Flag_Uploader-x86_64.AppImage`, one file with nothing else to install
 
 ## What you can do
 
@@ -43,10 +44,17 @@ One file, nothing else to install. Windows support is planned.
 
 ## How to use it
 
-1. Download `Stellaris_Flag_Uploader-x86_64.AppImage`, make it executable
-   (right-click → Properties → "Allow executing file as program") and open it.
-   The first time, it creates the **Custom Flags** mod in your Stellaris mod
-   folder and adds itself to your app menu.
+1. Install it:
+   - **Windows:** run `StellarisFlagUploader-Setup.exe`. If Windows says
+     "Windows protected your PC", click **More info** → **Run anyway** (the
+     installer isn't code-signed, which costs money every year). It adds a
+     Start menu shortcut.
+   - **Linux:** make `Stellaris_Flag_Uploader-x86_64.AppImage` executable
+     (right-click → Properties → "Allow executing file as program") and open
+     it. It adds itself to your app menu.
+
+   The first time it opens, it creates the **Custom Flags** mod in your
+   Stellaris mod folder.
 2. Upload images, make colours, backgrounds or emblems. Everything is saved
    straight into the mod.
 3. In the Paradox launcher, enable **Custom Flags** in your playset, start
@@ -68,9 +76,9 @@ textures, fonts, the flag frame, the parts of the mod built from the game's
 shader and interface files) is read from your own installed game when the app
 runs. The screenshots show the app with Stellaris installed.
 
-**Which Linux?** Distros from late 2023 onward (glibc 2.38+): Ubuntu 24.04,
-Linux Mint 22, Fedora 39, Debian 13, Arch and newer. Stellaris must be
-installed with Steam.
+**Which systems?** Windows 10 and 11 (64-bit), and Linux distros from late
+2023 onward (glibc 2.38+): Ubuntu 24.04, Linux Mint 22, Fedora 39, Debian 13,
+Arch and newer. Stellaris must be installed with Steam.
 
 ## For developers
 
@@ -78,6 +86,9 @@ installed with Steam.
 - `app/flag_studio.py`: the Designer and Maker tabs
 - `app/icon.png`: app icon (drawn by `packaging/make_icon.py`)
 - `packaging/linux/`: AppImage build script, launcher, desktop entry
+- `packaging/windows/`: PyInstaller recipe and Inno Setup installer script,
+  built by `.github/workflows/windows.yml` on GitHub's Windows machines (for
+  every `v*` tag, or by hand from the Actions tab)
 
 Run from source with Python 3, PyGObject (GTK 3), pycairo and Pillow
 (`python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pil` on Debian, Ubuntu or Mint):
