@@ -216,7 +216,7 @@ class GameData:
             if files:
                 self.all_categories[folder.name] = files
                 usage = folder / "usage.txt"
-                if not (usage.exists() and re.search(r"show_in_designer\s*=\s*no", usage.read_text())):
+                if not (usage.exists() and re.search(r"show_in_designer\s*=\s*no", usage.read_text(encoding="utf-8", errors="replace"))):
                     self.categories[folder.name] = files
 
     def colour(self, key):
@@ -337,7 +337,7 @@ def load_projects(core, kind):
     found = []
     for path in sorted(projects_dir(core).glob(f"{kind}_*.json")):
         try:
-            found.append(json.loads(path.read_text()))
+            found.append(json.loads(path.read_text(encoding="utf-8")))
         except ValueError:
             pass
     return sorted(found, key=lambda p: p["name"].lower())
@@ -513,7 +513,7 @@ class DesignerPage:
         core = data.core
         self.path = core.MOD / "designer.json"
         try:
-            self.design = json.loads(self.path.read_text())
+            self.design = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             self.design = {}
         ui.designer = self
@@ -595,7 +595,7 @@ class DesignerPage:
             return None
 
     def save(self):
-        self.path.write_text(json.dumps(self.design, indent=1))
+        self.path.write_text(json.dumps(self.design, indent=1), encoding="utf-8")
 
     # UI
     def refresh(self):
@@ -925,7 +925,7 @@ class Editor:
                 core.render(name, **core.settings(info))
                 core.write_flag_shader(self.data.game)
             projects_dir(core).mkdir(exist_ok=True)
-            (projects_dir(core) / f"{self.kind}_{project['id']}.json").write_text(json.dumps(project, indent=1))
+            (projects_dir(core) / f"{self.kind}_{project['id']}.json").write_text(json.dumps(project, indent=1), encoding="utf-8")
         except Exception as e:
             self.status_text = f"<span foreground='{RED}'>Couldn't save: {GLib.markup_escape_text(str(e))}</span>"
             self.show_status()

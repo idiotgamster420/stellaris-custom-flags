@@ -70,7 +70,8 @@ OUT = MOD / "flags" / "custom_flags"
 SIZES = {OUT: 128, OUT / "map": 256, OUT / "small": 24}
 UPLOADS = MOD / "uploads"
 MANIFEST = UPLOADS / "manifest.json"
-CACHE = Path.home() / ".cache" / "stellaris-flag-uploader"
+CACHE = (Path(os.environ["LOCALAPPDATA"]) if sys.platform == "win32" and os.environ.get("LOCALAPPDATA")
+         else Path.home() / ".cache") / "stellaris-flag-uploader"
 COLOURS = MOD / "colours.json"
 COLOURS_TXT = MOD / "flags" / "colors.txt"
 COLOURS_LOC = MOD / "localisation" / "english" / "custom_flags_colours_l_english.yml"
@@ -165,14 +166,14 @@ def mip_chain(img):
 
 def load_manifest():
     try:
-        return json.loads(MANIFEST.read_text())
+        return json.loads(MANIFEST.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
 
 def save_manifest(manifest):
     UPLOADS.mkdir(exist_ok=True)
-    MANIFEST.write_text(json.dumps(manifest, indent=1, sort_keys=True))
+    MANIFEST.write_text(json.dumps(manifest, indent=1, sort_keys=True), encoding="utf-8")
 
 
 def source(name):
@@ -461,7 +462,7 @@ def find_game():
     for root in roots:
         vdf = root / "steamapps" / "libraryfolders.vdf"
         if vdf.exists():
-            libraries += [Path(p.replace("\\\\", "\\")) for p in re.findall(r'"path"\s+"([^"]+)"', vdf.read_text(errors="replace"))]
+            libraries += [Path(p.replace("\\\\", "\\")) for p in re.findall(r'"path"\s+"([^"]+)"', vdf.read_text(encoding="utf-8", errors="replace"))]
     for library in libraries:
         game = library / "steamapps" / "common" / "Stellaris"
         if (game / "gfx" / "interface").is_dir():
@@ -514,7 +515,7 @@ def descriptor(game):
     """The mod's descriptor, marked for the installed game's version."""
     version = "v4.*"
     try:
-        raw = json.loads((game / "launcher-settings.json").read_text())["rawVersion"]  # e.g. "v4.5.2"
+        raw = json.loads((game / "launcher-settings.json").read_text(encoding="utf-8"))["rawVersion"]  # e.g. "v4.5.2"
         version = re.sub(r"^(v\d+\.\d+).*", r"\1.*", raw)
     except (OSError, ValueError, KeyError, TypeError):
         pass
@@ -630,13 +631,13 @@ def hex_code(rgb):
 def load_colours():
     """Your colours, in the order they appear in the game: [{key, name, rgb}]."""
     try:
-        return json.loads(COLOURS.read_text())
+        return json.loads(COLOURS.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
 
 
 def save_colours(colours):
-    COLOURS.write_text(json.dumps(colours, indent=1))
+    COLOURS.write_text(json.dumps(colours, indent=1), encoding="utf-8")
 
 
 def new_colour_key(colours):
@@ -1518,6 +1519,7 @@ def main():
     action.add_argument("--remove", metavar="NAME", help="remove an uploaded emblem")
     action.add_argument("--list", action="store_true", help="list uploaded emblems")
     action.add_argument("--check", action="store_true", help="show where the game and the mod are")
+    action.add_argument("--self-test", action="store_true", help="open every tab and close again (checks a build starts)")
     ap.add_argument("--fit", action="store_true", help="with --upload: pad to a square instead of cropping")
     ap.add_argument("--colour-map", action="store_true", help="with --upload: keep colours on the galaxy map")
     args = ap.parse_args()
@@ -1551,6 +1553,13 @@ def main():
             sys.exit(f"No uploaded emblem named {args.remove}")
         remove(args.remove)
         print(f"Removed {args.remove}")
+    elif args.self_test:
+        win = build_window()
+        from gi.repository import GLib, Gtk
+        win.show_all()
+        GLib.timeout_add(1500, Gtk.main_quit)
+        Gtk.main()
+        print("self-test ok")
     elif args.list:
         for name, info in sorted(load_manifest().items()):
             info = settings(info)

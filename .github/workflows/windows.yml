@@ -1,0 +1,92 @@
+name: Windows installer
+
+# Builds StellarisFlagUploader-Setup.exe on GitHub's Windows machines: MSYS2 provides
+# Python and GTK 3, PyInstaller bundles them with the app, Inno Setup makes the installer.
+# Runs for every v* tag (attaching it to that release), or by hand from the Actions tab.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Also attach the installer to this existing release (e.g. v1.0.0); empty: just build"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: msys2 {0}
+    env:
+      RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-python-gobject
+            mingw-w64-ucrt-x86_64-python-cairo
+            mingw-w64-ucrt-x86_64-python-pillow
+            mingw-w64-ucrt-x86_64-gtk3
+            mingw-w64-ucrt-x86_64-adwaita-icon-theme
+            mingw-w64-ucrt-x86_64-pyinstaller
+
+      - name: Check the app starts (from source)
+        timeout-minutes: 5
+        run: |
+          export CUSTOM_FLAGS_MOD="$(cygpath -w "$RUNNER_TEMP")\\source-test\\custom_flags"
+          python app/flag_uploader.py --check
+          python app/flag_uploader.py --self-test
+
+      - name: Bundle with PyInstaller
+        run: pyinstaller --noconfirm --distpath build/windows/dist --workpath build/windows/work packaging/windows/stellaris-flag-uploader.spec
+
+      - name: Check the bundled app starts on its own
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          # Only Windows itself on PATH, so nothing can come from MSYS2.
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          $env:CUSTOM_FLAGS_MOD = "$env:RUNNER_TEMP\bundle-test\custom_flags"
+          $app = Start-Process -FilePath "build\windows\dist\StellarisFlagUploader\StellarisFlagUploader.exe" `
+                               -ArgumentList "--self-test" -Wait -PassThru
+          if ($app.ExitCode -ne 0) { throw "self-test failed with exit code $($app.ExitCode)" }
+          if (-not (Test-Path "$env:CUSTOM_FLAGS_MOD\descriptor.mod")) { throw "the app didn't create the mod" }
+          Get-ChildItem -Recurse "$env:RUNNER_TEMP\bundle-test" | Select-Object -ExpandProperty FullName
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $version = if ($env:RELEASE_TAG) { $env:RELEASE_TAG.TrimStart("v") } else { "0.0.$env:GITHUB_RUN_NUMBER" }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DAppVersion=$version" packaging\windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StellarisFlagUploader-Setup
+          path: build/windows/StellarisFlagUploader-Setup.exe
+
+      - name: Attach to the release
+        if: env.RELEASE_TAG != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --title "Stellaris Custom Flags $env:RELEASE_TAG" --generate-notes
+          }
+          gh release upload $env:RELEASE_TAG build\windows\StellarisFlagUploader-Setup.exe --clobber --repo $env:GITHUB_REPOSITORY

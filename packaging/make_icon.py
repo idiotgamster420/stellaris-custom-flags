@@ -1,4 +1,4 @@
-"""Draws the app icon (app/icon.png): a hexagonal flag with a split field and a star.
+"""Draws the app icon (app/icon.png and app/icon.ico for Windows): a hexagonal flag with a split field and a star.
 Original artwork, so it can ship with the app (no game files)."""
 import math
 from pathlib import Path
@@ -62,4 +62,6 @@ cr.stroke()
 
 out = Path(__file__).resolve().parent.parent / "app" / "icon.png"
 surface.write_to_png(str(out))
-print("wrote", out)
+from PIL import Image  # the Windows icon, with the sizes Windows asks for
+Image.open(out).save(out.with_suffix(".ico"), sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+print("wrote", out, "and", out.with_suffix(".ico"))
