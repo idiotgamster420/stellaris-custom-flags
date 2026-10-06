@@ -1,51 +1,98 @@
-# Stellaris Flag Uploader
+# Stellaris Custom Flags: Custom Flag Mod & Flag Maker for Stellaris
 
-A desktop app that makes and manages the **Custom Flags** mod for Stellaris:
-your own images as emblems, exact custom colours, a Black Ops 2-style layer
-editor for backgrounds and emblems, emblems that fill the whole flag, and a
-designer that previews flags the way the game draws them.
+**Use your own images as your empire's flag in Stellaris.** Stellaris Custom
+Flags is a free custom flag mod plus an easy flag maker app: upload any picture
+as an emblem, pick any colour (not just the built-in swatches), design your own
+flag backgrounds and emblems in a layer editor, and preview your flag exactly as
+the game draws it. No modding experience needed.
 
-On first launch it creates the mod in the Stellaris mod folder and registers it
-with the Paradox launcher; enable "Custom Flags" in a playset to use it.
+![The flag designer: a custom background, colours and emblem on the in-game flag shape](docs/screenshots/designer.png)
 
-## No game files included
+## Download
 
-Everything that comes from Stellaris (UI textures, fonts, the flag frame, and
-the parts of the mod based on the game's own shader and interface files) is
-read from the player's installed game at run time. Nothing from Paradox is in
-this repository or in the builds.
+**[Download the latest version (Linux AppImage)](https://github.com/idiotgamster420/stellaris-custom-flags/releases/latest)**
 
-## Layout
+One file, nothing else to install. Windows support is planned.
+
+## What you can do
+
+- **Upload your own images as flag emblems**: PNG, JPG, WebP and more. They
+  appear in a new "Custom" category in the game's flag editor.
+- **Fill the whole flag with a picture**: images can cover the entire hexagon
+  instead of the small emblem square, cut neatly to the flag's shape, or spill
+  over its border for things like a sun breaking out of the corner.
+- **Custom flag colours**: make exact colours with a colour picker, hex code or
+  `rgb()` value, including an eyedropper that takes colours from anywhere on
+  screen. They're added to the game's flag, map border and ship colour pickers.
+- **Flag background maker**: stack shapes in layers (circles, stars, chevrons,
+  cogs, any game emblem, your own images), Black Ops 2 emblem editor style.
+  Backgrounds follow your empire's colours in game, like the built-in ones.
+- **Emblem editor**: the same layer editor for making emblems in any colours.
+- **Flag designer**: try backgrounds, colours and emblems together, drawn the
+  way Stellaris draws them, and see exactly what to pick in game.
+- **Galaxy map emblems** are handled for you: logos show as clean white
+  silhouettes like the game's own, photos in colour (you can switch).
+- **Easier emblem picking**: the game's emblem picker gets a lighter slot
+  background, so dark emblems don't disappear on black.
+
+| Upload your own emblems | Custom colours |
+| --- | --- |
+| ![Uploading an image that fills the whole flag](docs/screenshots/emblems.png) | ![Colour picker with hex and rgb input](docs/screenshots/colours.png) |
+
+![Flag background maker with layers](docs/screenshots/maker.png)
+
+## How to use it
+
+1. Download `Stellaris_Flag_Uploader-x86_64.AppImage`, make it executable
+   (right-click → Properties → "Allow executing file as program") and open it.
+   The first time, it creates the **Custom Flags** mod in your Stellaris mod
+   folder and adds itself to your app menu.
+2. Upload images, make colours, backgrounds or emblems. Everything is saved
+   straight into the mod.
+3. In the Paradox launcher, enable **Custom Flags** in your playset, start
+   Stellaris, and pick your emblem under **Custom** in the flag editor.
+   (Restart the game after making changes; it only loads flags at startup.)
+
+## Questions
+
+**Does it work in multiplayer?** Yes, it doesn't change the game's checksum.
+But the game never sends images to other players, so only players who also
+have the mod (with the same images) see your custom flag.
+
+**Achievements and Ironman?** It only changes graphics and interface files,
+which aren't part of the game's checksum, so it should stay
+achievement-compatible.
+
+**Does it include game files?** No. Anything based on Stellaris (interface
+textures, fonts, the flag frame, the parts of the mod built from the game's
+shader and interface files) is read from your own installed game when the app
+runs. The screenshots show the app with Stellaris installed.
+
+**Which Linux?** Distros from late 2023 onward (glibc 2.38+): Ubuntu 24.04,
+Linux Mint 22, Fedora 39, Debian 13, Arch and newer. Stellaris must be
+installed with Steam.
+
+## For developers
 
 - `app/flag_uploader.py`: the app and the mod logic (start here)
 - `app/flag_studio.py`: the Designer and Maker tabs
 - `app/icon.png`: app icon (drawn by `packaging/make_icon.py`)
 - `packaging/linux/`: AppImage build script, launcher, desktop entry
 
-## Run from source (Linux)
-
-Needs Python 3 with PyGObject (GTK 3), pycairo and Pillow
-(`python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pil` on Debian/Ubuntu/Mint):
+Run from source with Python 3, PyGObject (GTK 3), pycairo and Pillow
+(`python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-pil` on Debian, Ubuntu or Mint):
 
     python3 app/flag_uploader.py            # the app
     python3 app/flag_uploader.py --check    # where it finds the game and the mod
 
 Set `CUSTOM_FLAGS_MOD=/some/folder` to work on a test mod instead of the real one.
 
-## Build the Linux AppImage
+Build the AppImage with `packaging/linux/build-appimage.sh`. It downloads
+linuxdeploy and its GTK plugin into `build/tools` the first time and bundles the
+build machine's Python, GTK and libraries, so the result runs on systems with
+the same or newer glibc; build on an older distro for wider support.
 
-    packaging/linux/build-appimage.sh
+## License
 
-Downloads linuxdeploy and its GTK plugin into `build/tools` the first time, then
-writes `build/Stellaris_Flag_Uploader-x86_64.AppImage` (about 44 MB). It bundles
-the build machine's Python, GTK and libraries, so it runs on systems with the
-same or newer glibc. Built on Linux Mint 22 it needs glibc 2.38+ (Ubuntu 24.04,
-Mint 22, Fedora 39, Debian 13, Arch or newer). Build on an older distro for
-wider support.
-
-The AppImage adds itself to the app menu when first run.
-
-## Windows
-
-Planned. The app already knows the Windows Documents and Steam locations; the
-build (PyInstaller with MSYS2's GTK, plus an installer) still needs setting up.
+MIT, see [LICENSE](LICENSE). Not affiliated with or endorsed by Paradox
+Interactive. Stellaris is a trademark of Paradox Interactive AB.
