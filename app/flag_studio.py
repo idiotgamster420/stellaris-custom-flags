@@ -233,11 +233,11 @@ class GameData:
 
 
 def background_dir(core):
-    return core.HERE / "flags" / "backgrounds"
+    return core.MOD / "flags" / "backgrounds"
 
 
 def projects_dir(core):
-    return core.HERE / "maker"
+    return core.MOD / "maker"
 
 
 def slug(text):
@@ -511,7 +511,7 @@ class DesignerPage:
     def __init__(self, ui, data):
         self.ui, self.data = ui, data
         core = data.core
-        self.path = core.HERE / "designer.json"
+        self.path = core.MOD / "designer.json"
         try:
             self.design = json.loads(self.path.read_text())
         except (OSError, ValueError):

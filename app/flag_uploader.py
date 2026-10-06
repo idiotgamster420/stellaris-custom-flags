@@ -1,6 +1,9 @@
 #!/usr/bin/python3
 """Stellaris Flag Uploader.
 
+Creates and manages the "Custom Flags" mod in your Stellaris mod folder (set
+CUSTOM_FLAGS_MOD to use another folder), built partly from your installed game.
+
 Adds your own images to the "Custom" emblem category in the flag editor.
 Each upload becomes its own emblem; pick one to use it as your flag, or pick
 any other emblem to go back to a normal flag. The Colours tab adds your own
@@ -11,6 +14,7 @@ exact colours to the game's flag, map and ship colour pickers.
                                          --colour-map to keep colours on the galaxy map)
   flag_uploader.py --list                list uploaded emblems
   flag_uploader.py --remove NAME         remove one
+  flag_uploader.py --check               show where it finds the game and the mod
 
 Originals are kept in uploads/ so Fill/Fit and the map style can be changed later. The window
 borrows its look (textures, fonts, flag shape) from your Stellaris install.
@@ -22,6 +26,7 @@ import ctypes.util
 import functools
 import json
 import math
+import os
 import re
 import string
 import struct
@@ -32,16 +37,44 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageOps
 
-HERE = Path(__file__).resolve().parent
-OUT = HERE / "flags" / "custom_flags"
+APP = Path(__file__).resolve().parent
+MOD_NAME = "custom_flags"
+
+
+def windows_documents():
+    import ctypes.wintypes
+    path = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
+    ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, path)  # CSIDL_PERSONAL: Documents, even when moved
+    return Path(path.value)
+
+
+def stellaris_user_dir():
+    """Where Stellaris keeps this user's mods and saves."""
+    if sys.platform == "win32":
+        return windows_documents() / "Paradox Interactive" / "Stellaris"
+    candidates = [Path.home() / ".local/share/Paradox Interactive/Stellaris",
+                  Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Paradox Interactive/Stellaris"]
+    return next((c for c in candidates if c.exists()), candidates[0])
+
+
+def find_mod_dir():
+    if os.environ.get("CUSTOM_FLAGS_MOD"):
+        return Path(os.environ["CUSTOM_FLAGS_MOD"]).resolve()
+    if (APP / "descriptor.mod").exists():  # older installs run from inside the mod folder
+        return APP
+    return stellaris_user_dir() / "mod" / MOD_NAME
+
+
+MOD = find_mod_dir()
+OUT = MOD / "flags" / "custom_flags"
 SIZES = {OUT: 128, OUT / "map": 256, OUT / "small": 24}
-UPLOADS = HERE / "uploads"
+UPLOADS = MOD / "uploads"
 MANIFEST = UPLOADS / "manifest.json"
 CACHE = Path.home() / ".cache" / "stellaris-flag-uploader"
-COLOURS = HERE / "colours.json"
-COLOURS_TXT = HERE / "flags" / "colors.txt"
-COLOURS_LOC = HERE / "localisation" / "english" / "custom_flags_colours_l_english.yml"
-COLOURS_GUI = HERE / "interface" / "zz_custom_flags_colours.gui"
+COLOURS = MOD / "colours.json"
+COLOURS_TXT = MOD / "flags" / "colors.txt"
+COLOURS_LOC = MOD / "localisation" / "english" / "custom_flags_colours_l_english.yml"
+COLOURS_GUI = MOD / "interface" / "zz_custom_flags_colours.gui"
 # The game's colour grids hold exactly the 72 vanilla colours. Removing the gap between
 # swatches fits a 9x10 grid in the same space: (gui file, window, grid, slot size, per row).
 COLOUR_GRIDS = [
@@ -60,7 +93,7 @@ FLAG_BG = (13, 13, 186)  # where the background is drawn in that sprite
 # magenta pixel at alpha 1/255 in their top-left corner, invisible in game.
 FULL_SCALE = 1.5
 MARKER = (255, 0, 255, 1)
-SHADER = HERE / "gfx" / "FX" / "flag_sprite.shader"
+SHADER = MOD / "gfx" / "FX" / "flag_sprite.shader"
 PREVIEW_BG = (62, 62, 62)  # the "dark_grey" flag colour
 PREVIEW_SIZE = 260
 COLOUR_PREVIEW_SIZE = 160
@@ -309,7 +342,14 @@ def write_flag_shader(game):
 
 
 def game_running():
-    return subprocess.run(["pgrep", "-x", "stellaris"], capture_output=True).returncode == 0
+    try:
+        if sys.platform == "win32":
+            tasks = subprocess.run(["tasklist", "/FI", "IMAGENAME eq stellaris.exe", "/NH"], capture_output=True,
+                                   text=True, creationflags=0x08000000).stdout  # CREATE_NO_WINDOW
+            return "stellaris.exe" in tasks.lower()
+        return subprocess.run(["pgrep", "-x", "stellaris"], capture_output=True).returncode == 0
+    except OSError:
+        return False
 
 
 def pick_screen_colour(widget, on_pick, on_hover=None, on_done=None):
@@ -394,22 +434,171 @@ def dropper_button(styled):
     from gi.repository import Gtk
     button = styled(Gtk.Button(tooltip_text="Eyedropper: click anywhere on screen to take its colour (Esc cancels)"),
                     "sw-btn", "sw-small", "sw-dropper")
-    button.add(Gtk.Image.new_from_icon_name("color-select-symbolic", Gtk.IconSize.BUTTON))
+    if Gtk.IconTheme.get_default().has_icon("color-select-symbolic"):
+        button.add(Gtk.Image.new_from_icon_name("color-select-symbolic", Gtk.IconSize.BUTTON))
+    else:
+        button.set_label("Pick")
     return button
 
 
+def steam_roots():
+    if sys.platform == "win32":
+        roots = []
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as key:
+                roots.append(Path(winreg.QueryValueEx(key, "SteamPath")[0]))
+        except OSError:
+            pass
+        return roots + [Path(r"C:\Program Files (x86)\Steam")]
+    home = Path.home()
+    return [home / ".local/share/Steam", home / ".steam/steam", home / ".var/app/com.valvesoftware.Steam/.local/share/Steam"]
+
+
 def find_game():
-    roots = [Path.home() / ".local/share/Steam", Path.home() / ".steam/steam"]
+    roots = steam_roots()
     libraries = list(roots)
     for root in roots:
         vdf = root / "steamapps" / "libraryfolders.vdf"
         if vdf.exists():
-            libraries += [Path(p) for p in re.findall(r'"path"\s+"([^"]+)"', vdf.read_text(errors="replace"))]
+            libraries += [Path(p.replace("\\\\", "\\")) for p in re.findall(r'"path"\s+"([^"]+)"', vdf.read_text(errors="replace"))]
     for library in libraries:
         game = library / "steamapps" / "common" / "Stellaris"
         if (game / "gfx" / "interface").is_dir():
             return game
     return None
+
+
+# --- the mod's own files, created and refreshed by the app (never your uploads, colours or designs)
+
+USAGE = "random = no\nshow_in_designer = yes\n"
+CATEGORY_LOC = '\ufeffl_english:\n FLAG_CATEGORY_custom_flags:0 "Custom"\n'
+SLOT_GFX = """spriteTypes = {
+	# Like GFX_flag_no_mask, but drawn with a see-through background
+	# (gfx/FX/custom_flags_emblem_slot.shader) so the slot tile shows behind emblems.
+	flagSpriteType = {
+		name = "GFX_custom_flags_emblem_slot"
+		textureFile = "gfx/interface/flags/flag_no_frame.dds"		#this one will determine the size of the sprite
+		masking_texture = "gfx/interface/flags/flag_full_mask.dds"
+		effectFile = "gfx/FX/custom_flags_emblem_slot.shader"
+	}
+
+	# Mid-tone hex tile behind each emblem in the flag editor, so black emblems stay visible.
+	spriteType = {
+		name = "GFX_custom_flags_emblem_slot_bg"
+		textureFile = "gfx/interface/custom_flags/emblem_slot_bg.dds"
+	}
+}
+"""
+MOD_README = """Custom Flags
+============
+
+Made and managed by the Stellaris Flag Uploader app: open it to upload emblems,
+make colours, backgrounds and emblems, and plan flags. Enable "Custom Flags" in
+your playset in the Paradox launcher, then find your emblems under "Custom" in
+the flag editor. Restart Stellaris after changing anything.
+
+Your pictures are kept in uploads/, your designs in maker/ and colours.json.
+"""
+
+
+def write_if_changed(path, data):
+    path = Path(path)
+    data = data.encode("utf-8") if isinstance(data, str) else data
+    if not path.exists() or path.read_bytes() != data:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+
+def descriptor(game):
+    """The mod's descriptor, marked for the installed game's version."""
+    version = "v4.*"
+    try:
+        raw = json.loads((game / "launcher-settings.json").read_text())["rawVersion"]  # e.g. "v4.5.2"
+        version = re.sub(r"^(v\d+\.\d+).*", r"\1.*", raw)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return f'version="1.0"\ntags={{\n\t"Graphics"\n}}\nname="Custom Flags"\nsupported_version="{version}"\n'
+
+
+def emblem_slot_bg(size=100, top=(84, 120, 111), bottom=(50, 76, 70), line=(175, 230, 216, 115), edge=(120, 220, 200, 150), r=9):
+    """Mid-tone teal tile with a faint hex grid, so black, white and coloured emblems all stand out."""
+    tile = Image.new("RGBA", (size, size))
+    draw = ImageDraw.Draw(tile)
+    for y in range(size):  # lighter at the top, like the game's panels
+        t = y / (size - 1)
+        draw.line([(0, y), (size, y)], fill=tuple(round(a + (b - a) * t) for a, b in zip(top, bottom)) + (255,))
+    grid = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    lines = ImageDraw.Draw(grid)
+    w, h = math.sqrt(3) * r, 1.5 * r  # pointy-top hexagons, like the flag
+    for row in range(-1, int(size / h) + 2):
+        for col in range(-1, int(size / w) + 2):
+            cx, cy = col * w + (w / 2 if row % 2 else 0), row * h
+            lines.polygon([(cx + r * math.cos(math.radians(60 * k - 30)), cy + r * math.sin(math.radians(60 * k - 30)))
+                           for k in range(6)], outline=line)
+    tile.alpha_composite(grid)
+    ImageDraw.Draw(tile).rectangle([0, 0, size - 1, size - 1], outline=edge)
+    return tile
+
+
+def slot_files(game):
+    """The emblem picker's slot (interface override and its shader), from the game's own
+    flag_texture_entry and flag shader: the same, but drawn on a tile instead of black."""
+    shader = (game / "gfx/FX/flag_sprite.shader").read_text(encoding="utf-8")
+    for old, new in (
+            ("\t\t\tfloat4 vColor = float4( 0, 0, 0, 1 );\n",
+             "\t\t\t// Custom Flags: start see-through instead of black when no background colours are set\n"
+             "\t\t\t// (emblem slots), so the slot tile shows behind the emblem. Pattern slots stay opaque.\n"
+             "\t\t\tfloat3 vAnyColor = BackgroundColor[0].rgb + BackgroundColor[1].rgb + BackgroundColor[2].rgb;\n"
+             "\t\t\tfloat4 vColor = float4( 0, 0, 0, saturate( dot( vAnyColor, float3( 1, 1, 1 ) ) * 1000.f ) );\n"),
+            ("vColor.rgb = lerp( vColor.rgb, vSymbol.rgb, vSymbol.a );",
+             "vColor = lerp( vColor, float4( vSymbol.rgb, 1.f ), vSymbol.a );"),
+            ("vColor.rgb = lerp( vColor.rgb * vColor.a, FrameColor.rgb, FrameColor.a );",
+             "vColor.rgb = lerp( vColor.rgb, FrameColor.rgb, FrameColor.a );  // Custom Flags: not premultiplied")):
+        if shader.count(old) != 1:
+            raise ValueError("the game's flag shader has changed; the emblem picker keeps its black slots")
+        shader = shader.replace(old, new)
+    entry = gui_block((game / "interface/customize_species_editors.gui").read_text(encoding="utf-8"),
+                      "containerWindowType", "flag_texture_entry")
+    tile = ('iconType = {\n\t\t\tname = "custom_flags_slot_bg"\n\t\t\tspriteType = "GFX_custom_flags_emblem_slot_bg"\n'
+            '\t\t\tscale = 0.5\n\t\t\talwaystransparent = yes\n\t\t}\n\n\t\tbuttonType = {')
+    if entry.count('"GFX_flag_no_mask"') != 1 or "buttonType = {" not in entry:
+        raise ValueError("the game's emblem picker has changed; it keeps its black slots")
+    entry = entry.replace('"GFX_flag_no_mask"', '"GFX_custom_flags_emblem_slot"').replace("buttonType = {", tile, 1)
+    gui = ("# Generated by the Stellaris Flag Uploader from your game's flag_texture_entry\n"
+           "# (customize_species_editors.gui); loaded after it, so this one is used.\n"
+           "guiTypes = {\n\t" + entry + "\n}\n")
+    return shader, gui
+
+
+def ensure_mod(game):
+    """Create or refresh the mod's own files and its entry for the Paradox launcher."""
+    write_if_changed(MOD / "descriptor.mod", descriptor(game))
+    write_if_changed(MOD.parent / f"{MOD_NAME}.mod", descriptor(game) + f'path="{MOD.as_posix()}"\n')
+    write_if_changed(OUT / "usage.txt", USAGE)
+    write_if_changed(MOD / "localisation/english/custom_flags_l_english.yml", CATEGORY_LOC)
+    write_if_changed(MOD / "interface/custom_flags.gfx", SLOT_GFX)
+    write_if_changed(MOD / "gfx/interface/custom_flags/emblem_slot_bg.dds", dds_bytes([emblem_slot_bg()]))
+    write_if_changed(MOD / "README.txt", MOD_README)
+    UPLOADS.mkdir(parents=True, exist_ok=True)
+    if game:
+        shader, gui = slot_files(game)
+        write_if_changed(MOD / "gfx/FX/custom_flags_emblem_slot.shader", shader)
+        write_if_changed(MOD / "interface/zz_custom_flags.gui", gui)
+
+
+def install_desktop_entry():
+    """When run as an AppImage, add (or update) its entry in the app menu."""
+    appimage = os.environ.get("APPIMAGE")
+    if not sys.platform.startswith("linux") or not appimage or not (APP / "icon.png").exists():
+        return
+    data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+    icon = data / "icons/hicolor/256x256/apps/stellaris-flag-uploader.png"
+    write_if_changed(icon, (APP / "icon.png").read_bytes())
+    write_if_changed(data / "applications/stellaris-flag-uploader.desktop",
+                     "[Desktop Entry]\nType=Application\nName=Stellaris Flag Uploader\n"
+                     "Comment=Custom flags, colours and emblems for Stellaris\n"
+                     f'Exec="{appimage}"\nIcon={icon}\nTerminal=false\nCategories=Game;\n')
 
 
 def hsv_to_rgb(h, s, v):
@@ -715,10 +904,14 @@ def build_theme(game):
     save("selected", highlight)
     save("hover", Image.merge("RGBA", (*Image.new("RGB", highlight.size, (31, 224, 202)).split(), highlight.getchannel("A"))))
 
-    # Make the game's header font available to this process only.
-    fontconfig = ctypes.CDLL(ctypes.util.find_library("fontconfig") or "libfontconfig.so.1")
-    fontconfig.FcConfigAppFontAddFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-    fontconfig.FcConfigAppFontAddFile(None, str(game / "gfx/fonts/malgun.ttf").encode())
+    # Make the game's header font available to this process only (Windows already has it).
+    if sys.platform.startswith("linux"):
+        try:
+            fontconfig = ctypes.CDLL("libfontconfig.so.1")
+            fontconfig.FcConfigAppFontAddFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            fontconfig.FcConfigAppFontAddFile(None, str(game / "gfx/fonts/malgun.ttf").encode())
+        except OSError:
+            pass
     return CSS.substitute(values)
 
 
@@ -732,6 +925,12 @@ def build_window():
     import cairo
 
     game = find_game()
+    setup_error = None
+    try:
+        ensure_mod(game)
+        install_desktop_entry()
+    except Exception as e:
+        setup_error = e
     themed = False
     if game:
         try:
@@ -964,6 +1163,10 @@ def build_window():
     full_btn.connect("toggled", on_setting(full=full_btn.get_active))
     spill_btn.connect("toggled", on_setting(cut=lambda: not spill_btn.get_active()))
     rebuild()
+    if setup_error:
+        status.set_markup(f"<span foreground='{RED}'>Couldn't set up the mod: {GLib.markup_escape_text(str(setup_error))}</span>")
+    elif not game:
+        status.set_markup(f"<span foreground='{RED}'>Stellaris wasn't found. Install it with Steam, then reopen this.</span>")
 
     # Colours page: your own exact colours, added to the game's colour pickers.
     colours_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -1269,8 +1472,8 @@ def build_window():
         status.set_markup(f"<span foreground='{RED}'>{GLib.markup_escape_text(str(e))}</span>")
 
     # Designer and Maker tabs live in flag_studio.py, next to this file.
-    if str(HERE) not in sys.path:
-        sys.path.insert(0, str(HERE))
+    if str(APP) not in sys.path:
+        sys.path.insert(0, str(APP))
     import flag_studio
     studio_css = Gtk.CssProvider()
     studio_css.load_from_data(flag_studio.CSS.encode())
@@ -1314,9 +1517,29 @@ def main():
     action.add_argument("--upload", type=Path, nargs="+", metavar="IMAGE", help="add images as new emblems")
     action.add_argument("--remove", metavar="NAME", help="remove an uploaded emblem")
     action.add_argument("--list", action="store_true", help="list uploaded emblems")
+    action.add_argument("--check", action="store_true", help="show where the game and the mod are")
     ap.add_argument("--fit", action="store_true", help="with --upload: pad to a square instead of cropping")
     ap.add_argument("--colour-map", action="store_true", help="with --upload: keep colours on the galaxy map")
     args = ap.parse_args()
+    game = find_game()
+    if args.check:
+        import PIL
+        print(f"Python {sys.version.split()[0]} at {sys.executable}\nPillow {PIL.__version__} from {Path(PIL.__file__).parent}")
+        try:
+            import gi
+            gi.require_version("Gtk", "3.0")
+            from gi.repository import Gtk
+            import cairo
+            print(f"GTK {Gtk.get_major_version()}.{Gtk.get_minor_version()}.{Gtk.get_micro_version()} via {Path(gi.__file__).parent}"
+                  f"\npycairo {cairo.version} from {Path(cairo.__file__).parent}")
+            if sys.platform.startswith("linux"):  # which GTK library actually got loaded
+                maps = Path("/proc/self/maps").read_text()
+                print("libgtk-3:", next((l.split()[-1] for l in maps.splitlines() if "libgtk-3.so" in l), "not loaded"))
+        except Exception as e:
+            print(f"GTK unavailable: {e}")
+        print(f"Stellaris: {game or 'not found'}\nMod folder: {MOD}")
+        return
+    ensure_mod(game)
 
     if args.upload:
         for path in args.upload:

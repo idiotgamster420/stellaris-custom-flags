@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "${APPDIR:-$(dirname "$(readlink -f "$0")")}/usr/bin/stellaris-flag-uploader" "$@"

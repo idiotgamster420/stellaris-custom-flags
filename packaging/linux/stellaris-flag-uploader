@@ -1,0 +1,8 @@
+#!/bin/sh
+# Starts the app with the Python bundled in the AppImage, ignoring any Python on the system.
+APPDIR="${APPDIR:-$(dirname "$(dirname "$(dirname "$(readlink -f "$0")")")")}"
+export PYTHONHOME="$APPDIR/usr"
+export PYTHONPATH="$APPDIR/usr/lib/python3/dist-packages"
+export PYTHONNOUSERSITE=1
+export PYTHONDONTWRITEBYTECODE=1
+exec "$APPDIR/usr/bin/python3" -s "$APPDIR/usr/share/stellaris-flag-uploader/flag_uploader.py" "$@"

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Stellaris Flag Uploader
+Comment=Custom flags, colours and emblems for Stellaris
+Exec=stellaris-flag-uploader
+Icon=stellaris-flag-uploader
+Terminal=false
+Categories=Game;
