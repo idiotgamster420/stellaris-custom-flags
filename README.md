@@ -86,6 +86,8 @@ Arch and newer. Stellaris must be installed with Steam.
 - `app/flag_studio.py`: the Designer and Maker tabs
 - `app/icon.png`: app icon (drawn by `packaging/make_icon.py`)
 - `packaging/linux/`: AppImage build script, launcher, desktop entry
+- `packaging/workshop/`: builds the Steam Workshop showcase mod (`build_workshop.py`)
+  and its page text (`description.bbcode`)
 - `packaging/windows/`: PyInstaller recipe and Inno Setup installer script,
   built by `.github/workflows/windows.yml` on GitHub's Windows machines (for
   every `v*` tag, or by hand from the Actions tab)

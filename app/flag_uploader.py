@@ -575,7 +575,7 @@ def slot_files(game):
 def ensure_mod(game):
     """Create or refresh the mod's own files and its entry for the Paradox launcher."""
     write_if_changed(MOD / "descriptor.mod", descriptor(game))
-    write_if_changed(MOD.parent / f"{MOD_NAME}.mod", descriptor(game) + f'path="{MOD.as_posix()}"\n')
+    write_if_changed(MOD.parent / f"{MOD.name}.mod", descriptor(game) + f'path="{MOD.as_posix()}"\n')
     write_if_changed(OUT / "usage.txt", USAGE)
     write_if_changed(MOD / "localisation/english/custom_flags_l_english.yml", CATEGORY_LOC)
     write_if_changed(MOD / "interface/custom_flags.gfx", SLOT_GFX)
