@@ -36,10 +36,13 @@ FEATURES = [
       "Tells you what to pick in game"]),
 ]
 STEPS = [
-    ("Subscribe and enable", "Add this mod to your playset in the Paradox launcher."),
-    ("Get the free app", "Windows installer or Linux AppImage:\n" + LINK),
-    ("Open the app once", 'It creates a local mod, also called "Custom Flags".\nRestart the launcher and add it to your playset too.'),
-    ("Make your flag", "Upload images, make colours, backgrounds, emblems.\nRestart Stellaris, then look under Custom."),
+    ("Subscribe", ["Click the green Subscribe button on this page."]),
+    ("Get the free app", [LINK, "Scroll down to Assets and click the Windows or Linux file."]),
+    ("Install and open it", ['Windows says "Windows protected your PC"? Click More info, then Run anyway.']),
+    ("Add your picture", ["Emblems tab, then Upload Images."]),
+    ("Turn on BOTH mods", ["Paradox launcher: Playsets, Add more mods, tick:",
+                           "• Custom Flags - Your Own Flags, Emblems & Colours", "• Custom Flags"]),
+    ("Use it in game", ["Restart Stellaris, open the flag screen, click Custom."]),
 ]
 
 
@@ -206,17 +209,19 @@ def main():
 
     card = backdrop(10)  # how to get it working
     draw = ImageDraw.Draw(card)
-    text_block(draw, 60, 40, ["How to get it working"], orbitron(44), WHITE)
-    y = 130
-    for i, (heading, body) in enumerate(STEPS, start=1):
-        draw.ellipse([60, y, 120, y + 60], fill=CYAN)
-        number = orbitron(34)
-        draw.text((90 - draw.textlength(str(i), font=number) / 2, y + 9), str(i), font=number, fill=(9, 20, 24))
-        text_block(draw, 145, y - 2, [heading], jura(34), ORANGE)
-        text_block(draw, 145, y + 40, body.split("\n"), jura(25), WHITE, spacing=6)
-        y += 140
-    flag = core.compose_flag(game, studio.colourize(backgrounds[2], *pairs[0]), emblems[4], 380)
-    card.paste(flag, (W - 380 - 50, (H - 380) // 2 + 20), flag)
+    text_block(draw, 60, 36, ["How to get it working"], orbitron(44), WHITE)
+    number, heading, body = orbitron(26), jura(31), jura(25)
+    y = 128
+    for i, (title, lines) in enumerate(STEPS, start=1):  # one row per step: number, title, then what to do
+        draw.ellipse([60, y - 4, 106, y + 42], fill=CYAN)
+        draw.text((83 - draw.textlength(str(i), font=number) / 2, y + 4), str(i), font=number, fill=(9, 20, 24))
+        text_block(draw, 126, y, [title], heading, ORANGE)
+        top = y + 4
+        for line in lines:
+            colour = CYAN if line.startswith("\u2022") or line == LINK else WHITE  # mod names and the link stand out
+            top = text_block(draw, 450, top, wrap(draw, line, body, W - 450 - 50), body, colour, spacing=8)
+        y = max(top, y + 46) + 22
+    footer(draw, jura, "Full steps and fixes in the description below")
     cards.append(("08_how_to", card))
 
     for name, card in cards:
