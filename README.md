@@ -15,6 +15,8 @@ the game draws it. No modding experience needed.
 - **Windows 10/11:** `StellarisFlagUploader-Setup.exe`, a normal installer (no admin rights needed)
 - **Linux:** `Stellaris_Flag_Uploader-x86_64.AppImage`, one file with nothing else to install
 
+Also on the **[Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3814981310)**: example emblems and backgrounds, and a brighter emblem picker.
+
 ## What you can do
 
 - **Upload your own images as flag emblems**: PNG, JPG, WebP and more. They
