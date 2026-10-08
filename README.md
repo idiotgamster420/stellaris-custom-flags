@@ -44,24 +44,37 @@ Also on the **[Steam Workshop](https://steamcommunity.com/sharedfiles/filedetail
 
 ![Flag background maker with layers](docs/screenshots/maker.png)
 
-## How to use it
+## How to use it (step by step)
 
-1. Install it:
-   - **Windows:** run `StellarisFlagUploader-Setup.exe`. If Windows says
-     "Windows protected your PC", click **More info** → **Run anyway** (the
-     installer isn't code-signed, which costs money every year). It adds a
-     Start menu shortcut.
-   - **Linux:** make `Stellaris_Flag_Uploader-x86_64.AppImage` executable
-     (right-click → Properties → "Allow executing file as program") and open
-     it. It adds itself to your app menu.
+1. **Download the app.** Open the
+   [latest release](https://github.com/idiotgamster420/stellaris-custom-flags/releases/latest),
+   scroll down to **Assets**, and click the file for your computer:
+   `StellarisFlagUploader-Setup.exe` (Windows) or
+   `Stellaris_Flag_Uploader-x86_64.AppImage` (Linux).
+2. **Install and open it.**
+   - **Windows:** double-click the downloaded file. If a blue box says
+     "Windows protected your PC", click **More info**, then **Run anyway**
+     (the installer isn't code-signed, which costs money every year). Click
+     **Next** through the installer, then **Finish**, and the app opens.
+   - **Linux:** right-click the AppImage, choose **Properties** →
+     **Permissions**, tick **Allow executing file as program**, then
+     double-click it.
 
-   The first time it opens, it creates the **Custom Flags** mod in your
+   The first time it opens, it creates a mod called **Custom Flags** in your
    Stellaris mod folder.
-2. Upload images, make colours, backgrounds or emblems. Everything is saved
-   straight into the mod.
-3. In the Paradox launcher, enable **Custom Flags** in your playset, start
-   Stellaris, and pick your emblem under **Custom** in the flag editor.
-   (Restart the game after making changes; it only loads flags at startup.)
+3. **Add your picture.** On the **Emblems** tab, click **Upload Images** and
+   pick a picture. Tick **Fill the whole flag** if you want it to cover the
+   whole flag.
+4. **Turn the mod on.** Close the Paradox launcher and start Stellaris from
+   Steam again. Click **Playsets** → **Add more mods**, tick **Custom Flags**
+   (and the [Workshop version](https://steamcommunity.com/sharedfiles/filedetails/?id=3814981310)
+   too, if you subscribed to it), and make sure that playset is selected.
+5. **Use it.** Click **Play**, go to the flag screen, and choose your picture
+   under **Custom**.
+
+After changing anything in the app, restart Stellaris; it only loads flags
+when it starts. Don't see **Custom**? The mod isn't on in your selected
+playset; repeat step 4.
 
 ## Questions
 
