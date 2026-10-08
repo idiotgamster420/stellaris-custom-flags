@@ -66,9 +66,13 @@ Also on the **[Steam Workshop](https://steamcommunity.com/sharedfiles/filedetail
    pick a picture. Tick **Fill the whole flag** if you want it to cover the
    whole flag.
 4. **Turn the mod on.** Close the Paradox launcher and start Stellaris from
-   Steam again. Click **Playsets** → **Add more mods**, tick **Custom Flags**
-   (and the [Workshop version](https://steamcommunity.com/sharedfiles/filedetails/?id=3814981310)
-   too, if you subscribed to it), and make sure that playset is selected.
+   Steam again. Click **Playsets** → **Add more mods**, and tick:
+   - **Custom Flags** (just those two words): the mod the app made
+   - **Custom Flags - Your Own Flags, Emblems & Colours**: the
+     [Workshop mod](https://steamcommunity.com/sharedfiles/filedetails/?id=3814981310),
+     if you subscribed to it
+
+   Then make sure that playset is selected.
 5. **Use it.** Click **Play**, go to the flag screen, and choose your picture
    under **Custom**.
 
