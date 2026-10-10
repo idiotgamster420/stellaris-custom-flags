@@ -1911,14 +1911,10 @@ def build_window():
         except Exception as e:
             export_status.set_markup(red(f"Couldn't open the folder: {e}"))
 
-    def add_dropped(uris):
-        """Images dragged onto the Export view become emblems, already picked for the pack."""
-        added, errors = [], []
-        for uri in uris:
-            path = Path(GLib.filename_from_uri(uri)[0]) if uri.startswith("file:") else None
-            if not path or path.suffix.lower().lstrip(".") not in EXTS:
-                errors.append(f"{path.name if path else uri}: not an image")
-                continue
+    def add_images(paths, errors):
+        """Dropped images become emblems, already picked for the pack."""
+        added = []
+        for path in paths:
             try:
                 added.append(upload(path))
             except Exception as e:
@@ -1929,11 +1925,6 @@ def build_window():
         export_status.set_markup(grey(f"Added {len(added)} image{'s' * (len(added) != 1)} as emblems.") if added else "")
         if errors:
             export_status.set_markup(export_status.get_label() + ("\n" if added else "") + red("Couldn't add " + "; ".join(errors)))
-
-    export_view.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
-    export_view.drag_dest_add_uri_targets()
-    export_view.connect("drag-data-received", lambda w, ctx, x, y, data, info, t: add_dropped(data.get_uris() or []))
-    win.share_drop = add_dropped  # handle for scripted tests
 
     pick_all.connect("clicked", lambda _: set_all(True))
     pick_none.connect("clicked", lambda _: set_all(False))
@@ -1984,8 +1975,9 @@ def build_window():
             pack_list.add(row)
         pack_list.show_all()
         places = "your Flag Packs folder, Downloads or Desktop"
-        found_label.set_markup(grey(f"Packs in {places}, newest first. Pick one and click Import Pack.") if found else
-                               grey(f"No flag packs in {places} yet. When a friend sends you one, save it there "
+        found_label.set_markup(grey(f"Packs in {places}, newest first. Pick one and click Import Pack, or drag a pack here.")
+                               if found else
+                               grey(f"No flag packs in {places} yet. Drag one here, save it to one of those folders "
                                     "(Discord saves to Downloads), or click Browse to find it."))
         index = next((i for i, f in enumerate(found) if f[0] == select), 0)
         if found:
@@ -2072,6 +2064,26 @@ def build_window():
         share_modes.pack_start(toggle, False, False, 0)
         share_toggles[mode] = toggle
     show_share("export")
+
+    def add_dropped(uris):
+        """Files dragged anywhere onto the Share tab: packs are imported, images become emblems."""
+        paths = [Path(GLib.filename_from_uri(u)[0]) for u in uris if u.startswith("file:")]
+        packs = [p for p in paths if p.suffix.lower() == ".zip"]
+        images = [p for p in paths if p.suffix.lower().lstrip(".") in EXTS]
+        errors = [f"{p.name}: not a picture or flag pack" for p in paths if p not in packs and p not in images]
+        if images or not packs:
+            show_share("export")
+            add_images(images, errors)
+        elif errors:
+            import_status.set_markup(red("Couldn't add " + "; ".join(errors)))
+        for path in packs:
+            show_share("import")
+            do_import(path)
+
+    share_page.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
+    share_page.drag_dest_add_uri_targets()
+    share_page.connect("drag-data-received", lambda w, ctx, x, y, data, info, t: add_dropped(data.get_uris() or []))
+    win.share_drop = add_dropped  # handle for scripted tests
     # Tabs pick up what the others changed (uploads, colours, saved designs) when shown.
     refreshers = {"emblems": lambda: rebuild(select=selected()), "maker": maker.refresh, "designer": designer.refresh,
                   "share": lambda: show_share(share_stack.get_visible_child_name() or "export")}
