@@ -1825,7 +1825,7 @@ def build_window():
 
     def count_picks():
         n = sum(t.get_active() for t in picks.values())
-        picked_label.set_markup(grey(f"{n} of {len(picks)} selected. Click one to leave it out of the pack.") if picks else "")
+        picked_label.set_markup(grey(f"{n} of {len(picks)} selected. Click one to leave it out, or drag images here to add them.") if picks else "")
         export_btn.set_sensitive(n > 0)
         save_as_btn.set_sensitive(n > 0)
 
@@ -1867,8 +1867,8 @@ def build_window():
                 flow.add(toggle)
             pick_box.pack_start(flow, False, False, 0)
         if not picks:
-            pick_box.pack_start(share_label(grey("Nothing to share yet. Upload images, make colours or design "
-                                                 "something in the Maker first.")), False, False, 0)
+            pick_box.pack_start(share_label(grey("Nothing to share yet. Drag images here, or make colours or "
+                                                 "designs on the other tabs first.")), False, False, 0)
         pick_box.show_all()
         count_picks()
 
@@ -1910,6 +1910,30 @@ def build_window():
                 Gtk.show_uri_on_window(win, path.parent.as_uri(), Gdk.CURRENT_TIME)
         except Exception as e:
             export_status.set_markup(red(f"Couldn't open the folder: {e}"))
+
+    def add_dropped(uris):
+        """Images dragged onto the Export view become emblems, already picked for the pack."""
+        added, errors = [], []
+        for uri in uris:
+            path = Path(GLib.filename_from_uri(uri)[0]) if uri.startswith("file:") else None
+            if not path or path.suffix.lower().lstrip(".") not in EXTS:
+                errors.append(f"{path.name if path else uri}: not an image")
+                continue
+            try:
+                added.append(upload(path))
+            except Exception as e:
+                errors.append(f"{path.name}: {e}")
+        if added:
+            fill_picks()
+            rebuild(select=added[-1], changed=True)
+        export_status.set_markup(grey(f"Added {len(added)} image{'s' * (len(added) != 1)} as emblems.") if added else "")
+        if errors:
+            export_status.set_markup(export_status.get_label() + ("\n" if added else "") + red("Couldn't add " + "; ".join(errors)))
+
+    export_view.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
+    export_view.drag_dest_add_uri_targets()
+    export_view.connect("drag-data-received", lambda w, ctx, x, y, data, info, t: add_dropped(data.get_uris() or []))
+    win.share_drop = add_dropped  # handle for scripted tests
 
     pick_all.connect("clicked", lambda _: set_all(True))
     pick_none.connect("clicked", lambda _: set_all(False))
