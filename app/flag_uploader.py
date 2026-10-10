@@ -26,6 +26,7 @@ import colorsys
 import ctypes
 import ctypes.util
 import functools
+import io
 import json
 import math
 import os
@@ -736,15 +737,67 @@ SAFE_NAME = re.compile(r"[a-z0-9_]{1,80}")
 MAX_PACK_FILE = 64 << 20  # bytes; anything bigger isn't from this app
 
 
-def export_pack(path):
-    """Write all your emblems, backgrounds, colours and Maker designs to a zip.
+def known_folder(windows_id, fallback):
+    """A Windows known folder (it may have been moved, e.g. into OneDrive), else ~/fallback."""
+    if sys.platform == "win32":
+        try:
+            import ctypes.wintypes
+            import uuid
+            guid = (ctypes.c_byte * 16).from_buffer_copy(uuid.UUID(windows_id).bytes_le)
+            out = ctypes.c_wchar_p()
+            if ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(out)) == 0:
+                path = Path(out.value)
+                ctypes.windll.ole32.CoTaskMemFree(out)
+                return path
+        except Exception:
+            pass
+    return Path.home() / fallback
+
+
+def packs_dir():
+    """Where Export Pack saves: Documents/Stellaris Flag Packs."""
+    documents = windows_documents() if sys.platform == "win32" else Path.home() / "Documents"
+    return (documents if documents.is_dir() else Path.home()) / "Stellaris Flag Packs"
+
+
+def pack_search_dirs():
+    """Where the Share tab looks for packs friends sent: (label, folder)."""
+    return [("Flag Packs folder", packs_dir()),
+            ("Downloads", known_folder("374DE290-123F-4565-9164-39C4925E467B", "Downloads")),
+            ("Desktop", known_folder("B4BFCC3A-DB2C-424C-B029-7FE99A87C641", "Desktop"))]
+
+
+def design_output(design_file):
+    """The emblem or background a saved Maker design makes: ("emblems"/"backgrounds", name)."""
+    try:
+        output = json.loads((DESIGNS / design_file).read_text(encoding="utf-8")).get("output")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return ("backgrounds" if design_file.startswith("background_") else "emblems"), output
+
+
+def pack_contents():
+    """Everything you could put in a pack: {"emblems": [names], "backgrounds": [...], "colours": [keys]}."""
+    return {"emblems": sorted(n for n in load_manifest() if source(n).exists()),
+            "backgrounds": sorted(p.stem for p in BACKGROUNDS.glob("*.dds")) if BACKGROUNDS.is_dir() else [],
+            "colours": [c["key"] for c in load_colours()]}
+
+
+def export_pack(path, name="My Flags", chosen=None):
+    """Write emblems, backgrounds and colours to a zip, with the Maker designs that make
+    them; chosen = {"emblems": [...], ...} picks which (default: everything).
     Returns how many of each it holds."""
+    chosen = chosen or pack_contents()
     manifest = load_manifest()
-    emblems = {name: settings(info) for name, info in manifest.items() if source(name).exists()}
-    backgrounds = sorted(p.stem for p in BACKGROUNDS.glob("*.dds")) if BACKGROUNDS.is_dir() else []
-    designs = sorted(p.name for p in DESIGNS.glob("*.json")) if DESIGNS.is_dir() else []
-    pack = {"format": PACK_FORMAT, "made_with": "Stellaris Flag Uploader", "emblems": emblems,
-            "backgrounds": backgrounds, "colours": load_colours(), "designs": designs}
+    emblems = {n: settings(manifest[n]) for n in chosen.get("emblems", []) if n in manifest and source(n).exists()}
+    backgrounds = [n for n in chosen.get("backgrounds", []) if (BACKGROUNDS / f"{n}.dds").exists()]
+    keys = set(chosen.get("colours", []))
+    picked = {("emblems", n) for n in emblems} | {("backgrounds", n) for n in backgrounds}
+    designs = sorted(p.name for p in DESIGNS.glob("*.json") if design_output(p.name) in picked) if DESIGNS.is_dir() else []
+    pack = {"format": PACK_FORMAT, "made_with": "Stellaris Flag Uploader", "name": name.strip()[:60] or "My Flags",
+            "emblems": emblems, "backgrounds": backgrounds,
+            "colours": [c for c in load_colours() if c["key"] in keys], "designs": designs}
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("pack.json", json.dumps(pack, indent=1))
         for name in emblems:
@@ -800,6 +853,65 @@ def read_pack(path):
                 colours=[{"key": c["key"], "name": c["name"][:40], "rgb": parse_colour_code(",".join(map(str, c["rgb"])))}
                          for c in colours])
     return pack, files
+
+
+def new_pack_path(name):
+    """A free file name for a pack called `name` in the Flag Packs folder."""
+    base = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "", name).strip(" .") or "My Flags"
+    path, n = packs_dir() / f"{base}.zip", 2
+    while path.exists():
+        path, n = packs_dir() / f"{base} ({n}).zip", n + 1
+    return path
+
+
+def peek_pack(path, thumbs=6):
+    """A quick look at a pack for the Share tab's list, or None if it isn't one:
+    {"name", "counts", "thumbs": [(png bytes, fit)]}. Only reads pack.json and a few emblems."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            info = z.getinfo("pack.json")
+            if info.file_size > MAX_PACK_FILE:
+                return None
+            pack = json.loads(z.read(info))
+            if not isinstance(pack, dict) or not isinstance(pack.get("format"), int):
+                return None
+            emblems = pack.get("emblems") if isinstance(pack.get("emblems"), dict) else {}
+            shown = []
+            for name, options in list(emblems.items())[:thumbs]:
+                member = f"emblems/{name}.png"
+                if SAFE_NAME.fullmatch(name) and member in z.namelist() and z.getinfo(member).file_size <= MAX_PACK_FILE:
+                    shown.append((z.read(member), bool(isinstance(options, dict) and options.get("fit"))))
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+        return None
+    name = pack.get("name") if isinstance(pack.get("name"), str) else ""
+    counts = {kind: len(pack.get(kind) or []) for kind in ("emblems", "backgrounds", "colours")}
+    return {"name": name.strip()[:60] or Path(path).stem, "counts": counts, "thumbs": shown,
+            "newer": pack["format"] > PACK_FORMAT}
+
+
+def find_packs():
+    """Flag packs in the Flag Packs folder, Downloads and Desktop, newest first:
+    [(path, where, peek_pack(path))]."""
+    found, seen = [], set()
+    for where, folder in pack_search_dirs():
+        try:
+            zips = [p for p in folder.iterdir() if p.suffix.lower() == ".zip" and p.is_file()]
+        except OSError:
+            continue
+        for path in zips:
+            key = path.resolve()
+            if key in seen:
+                continue
+            seen.add(key)
+            peek = peek_pack(path)
+            if peek:
+                found.append((path, where, peek))
+    return sorted(found, key=lambda f: f[0].stat().st_mtime, reverse=True)
+
+
+def counts_text(counts):
+    """{"emblems": 2, "colours": 1} -> "2 emblems, 1 colour"."""
+    return ", ".join(f"{n} {kind[:-1] if n == 1 else kind}" for kind, n in counts.items() if n) or "nothing"
 
 
 def pack_plan(pack, files):
@@ -1007,6 +1119,13 @@ CSS = string.Template("""
 .sw-window flowboxchild:hover { background-image: url("$hover"); background-size: 100% 100%; }
 .sw-window flowboxchild:selected { background-color: transparent; background-image: url("$selected"); background-size: 100% 100%; }
 .sw-window scrollbar, .sw-window scrollbar trough { background: transparent; border: none; }
+.sw-window button.sw-pick {
+  background-image: none; background-color: rgba(0, 0, 0, 0.35); border: 1px solid rgba(31, 224, 202, 0.12);
+  border-radius: 0; box-shadow: none; padding: 3px; min-width: 0; min-height: 0;
+}
+.sw-window button.sw-pick:hover { border-color: rgba(31, 224, 202, 0.5); }
+.sw-window button.sw-pick:checked { background-color: rgba(31, 224, 202, 0.16); border-color: #1fe0ca; }
+.sw-window button.sw-pick:not(:checked) image { opacity: 0.3; }
 .sw-window scrollbar slider { background-color: rgba(31, 224, 202, 0.45); border: none; border-radius: 0; min-width: 4px; }
 """)
 
@@ -1060,7 +1179,7 @@ def build_window():
     gi.require_version("Gdk", "3.0")
     gi.require_version("GdkPixbuf", "2.0")
     gi.require_version("Pango", "1.0")
-    from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
+    from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango
     import cairo
 
     game = find_game()
@@ -1626,37 +1745,41 @@ def build_window():
     win.studio = types.SimpleNamespace(designer=designer, maker=maker)  # handle for scripted tests
 
     # Share page: flag packs, so friends (and multiplayer groups) get the same pictures.
-    share_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14, margin_top=6)
+    # Export picks what goes in from thumbnails and saves to Documents/Stellaris Flag Packs;
+    # Import lists the packs it finds in the usual folders. Save As and Browse are there
+    # for anyone who'd rather use the file explorer.
+    share_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
     stack.add_named(share_page, "share")
 
     def grey(text):
         return f"<span foreground='{GREY}'>{GLib.markup_escape_text(text)}</span>"
 
-    def share_label(markup, cls=None):
+    def red(text):
+        return f"<span foreground='{RED}'>{GLib.markup_escape_text(text)}</span>"
+
+    def share_label(markup="", cls=None):
         label = Gtk.Label(xalign=0, wrap=True, max_width_chars=70, use_markup=True)
         label.set_markup(markup)
         return styled(label, cls) if cls else label
 
-    share_page.pack_start(share_label(GLib.markup_escape_text("Flag packs"), "sw-name"), False, False, 0)
-    share_page.pack_start(share_label(grey(
-        "Playing multiplayer? Stellaris never sends pictures to other players, so everyone needs the same ones "
-        "to see each other's flags. Export a pack, send it to your friends (Discord, email, a USB stick), and "
-        "have them import it here.")), False, False, 0)
-    share_actions = Gtk.Grid(row_spacing=12, column_spacing=16)
-    export_btn = styled(Gtk.Button(label="Export Pack"), "sw-btn")
-    import_btn = styled(Gtk.Button(label="Import Pack"), "sw-btn")
-    share_actions.attach(export_btn, 0, 0, 1, 1)
-    share_actions.attach(share_label(grey("Saves all your emblems, backgrounds, colours and Maker designs to one .zip file.")), 1, 0, 1, 1)
-    share_actions.attach(import_btn, 0, 1, 1, 1)
-    share_actions.attach(share_label(grey("Adds a friend's pack. It shows what will change before replacing anything of yours.")), 1, 1, 1, 1)
-    share_page.pack_start(share_actions, False, False, 0)
-    share_page.pack_start(share_label(
-        grey("Whole group: ") + f"<span foreground='{YELLOW}'>one player imports everyone's packs, then exports one pack "
-        "for everybody</span>" + grey(". Everyone then has every flag.")), False, False, 0)
-    share_status = share_label("")
-    share_page.pack_start(share_status, False, False, 0)
+    def panel(child, height):
+        scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroller.set_size_request(-1, height)
+        scroller.add(child)
+        box = styled(Gtk.Box(), "sw-dark")
+        box.pack_start(scroller, True, True, 0)
+        return box
 
-    def pack_chooser(title, action, button):
+    share_modes = Gtk.Box(spacing=8)
+    share_page.pack_start(share_modes, False, False, 0)
+    share_page.pack_start(share_label(grey(
+        "Playing multiplayer? Stellaris never sends pictures to other players, so everyone needs the same ones. "
+        "Export a pack and send it to your friends; they import it here. For a whole group, one player imports "
+        "everyone's packs, then exports one pack for everybody.")), False, False, 0)
+    share_stack = Gtk.Stack()
+    share_page.pack_start(share_stack, True, True, 0)
+
+    def pack_chooser(title, action, button, folder):
         dialog = Gtk.FileChooserDialog(title=title, parent=win, action=action)
         dialog.add_buttons("_Cancel", Gtk.ResponseType.CANCEL, button, Gtk.ResponseType.OK)
         zips = Gtk.FileFilter()
@@ -1664,41 +1787,193 @@ def build_window():
         zips.add_pattern("*.zip")
         zips.add_pattern("*.ZIP")
         dialog.add_filter(zips)
-        folder = next((p for p in (Path.home() / "Desktop", Path.home() / "Downloads", Path.home()) if p.is_dir()), None)
+        folder = next((p for p in (folder, Path.home() / "Downloads", Path.home()) if p.is_dir()), None)
         if folder:
             dialog.set_current_folder(str(folder))
         return dialog
 
-    def on_export(_):
-        dialog = pack_chooser("Save flag pack", Gtk.FileChooserAction.SAVE, "_Save")
-        dialog.set_do_overwrite_confirmation(True)
-        dialog.set_current_name("Custom Flags pack.zip")
-        path = Path(dialog.get_filename()) if dialog.run() == Gtk.ResponseType.OK else None
-        dialog.destroy()
-        if not path:
-            return
+    # Export: every emblem, background and colour as a tile; click one to leave it out.
+    export_view = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    share_stack.add_named(export_view, "export")
+    pick_head = Gtk.Box(spacing=8)
+    picked_label = share_label()
+    pick_all = styled(Gtk.Button(label="All"), "sw-btn", "sw-small")
+    pick_none = styled(Gtk.Button(label="None"), "sw-btn", "sw-small")
+    pick_head.pack_start(picked_label, True, True, 0)
+    pick_head.pack_end(pick_none, False, False, 0)
+    pick_head.pack_end(pick_all, False, False, 0)
+    export_view.pack_start(pick_head, False, False, 0)
+    pick_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin=4)
+    export_view.pack_start(panel(pick_box, 200), True, True, 0)
+    export_row = Gtk.Box(spacing=10)
+    pack_name = Gtk.Entry(placeholder_text="Pack name", max_length=60, text="My Flags",
+                          tooltip_text="What your friends see in their list of packs")
+    export_btn = styled(Gtk.Button(label="Export Pack", tooltip_text="Save to Documents/Stellaris Flag Packs"), "sw-btn")
+    save_as_btn = styled(Gtk.Button(label="Save As...", tooltip_text="Choose where to save it"), "sw-btn")
+    export_row.pack_start(pack_name, True, True, 0)
+    export_row.pack_start(export_btn, False, False, 0)
+    export_row.pack_start(save_as_btn, False, False, 0)
+    export_view.pack_start(export_row, False, False, 0)
+    export_done = Gtk.Box(spacing=10)
+    export_status = share_label()
+    open_folder_btn = styled(Gtk.Button(label="Open Folder", tooltip_text="Show the pack, ready to send"), "sw-btn")
+    open_folder_btn.set_no_show_all(True)
+    export_done.pack_start(export_status, True, True, 0)
+    export_done.pack_end(open_folder_btn, False, False, 0)
+    export_view.pack_start(export_done, False, False, 0)
+    picks, left_out, last_export = {}, set(), []
+
+    def count_picks():
+        n = sum(t.get_active() for t in picks.values())
+        picked_label.set_markup(grey(f"{n} of {len(picks)} selected. Click one to leave it out of the pack.") if picks else "")
+        export_btn.set_sensitive(n > 0)
+        save_as_btn.set_sensitive(n > 0)
+
+    def pick_toggled(toggle, key):
+        (left_out.discard if toggle.get_active() else left_out.add)(key)
+        count_picks()
+
+    def fill_picks():
+        for child in pick_box.get_children():
+            pick_box.remove(child)
+        picks.clear()
+        contents, manifest = pack_contents(), load_manifest()
+        colour_info = {c["key"]: c for c in load_colours()}
+        size = THUMB_SIZE * scale
+        for kind, title in (("emblems", "Emblems"), ("backgrounds", "Backgrounds"), ("colours", "Colours")):
+            if not contents[kind]:
+                continue
+            pick_box.pack_start(styled(Gtk.Label(label=title, xalign=0), "sw-section"), False, False, 0)
+            flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=9, min_children_per_line=9,
+                               homogeneous=True, valign=Gtk.Align.START)
+            for key in contents[kind]:
+                try:
+                    if kind == "emblems":
+                        im, tip = square(Image.open(source(key)).convert("RGBA"), size, settings(manifest[key])["fit"]), key
+                    elif kind == "backgrounds":
+                        channels = open_image(BACKGROUNDS / f"{key}.dds").resize((size, size), Image.LANCZOS)
+                        im, tip = flag_studio.colourize(channels, (14, 30, 78), (70, 205, 185)), key
+                    else:
+                        c = colour_info[key]
+                        im, tip = swatch_image(c["rgb"], size), f'{c["name"]}  {hex_code(c["rgb"])}'
+                except Exception:
+                    continue  # a damaged file can't be shared anyway
+                image = Gtk.Image()
+                show_image(image, im)
+                toggle = styled(Gtk.ToggleButton(active=(kind, key) not in left_out, tooltip_text=tip), "sw-pick")
+                toggle.add(image)
+                toggle.connect("toggled", pick_toggled, (kind, key))
+                picks[(kind, key)] = toggle
+                flow.add(toggle)
+            pick_box.pack_start(flow, False, False, 0)
+        if not picks:
+            pick_box.pack_start(share_label(grey("Nothing to share yet. Upload images, make colours or design "
+                                                 "something in the Maker first.")), False, False, 0)
+        pick_box.show_all()
+        count_picks()
+
+    def set_all(active):
+        for toggle in picks.values():
+            toggle.set_active(active)
+
+    def do_export(path):
         if path.suffix.lower() != ".zip":
             path = path.with_name(path.name + ".zip")
+        chosen = {kind: [key for (k, key), t in picks.items() if k == kind and t.get_active()]
+                  for kind in ("emblems", "backgrounds", "colours")}
         try:
-            counts = export_pack(path)
+            counts = export_pack(path, pack_name.get_text(), chosen)
         except Exception as e:
-            share_status.set_markup(f"<span foreground='{RED}'>Couldn't save the pack: {GLib.markup_escape_text(str(e))}</span>")
+            export_status.set_markup(red(f"Couldn't save the pack: {e}"))
             return
-        held = ", ".join(f"{n} {kind[:-1] if n == 1 else kind}" for kind, n in counts.items() if n) or "nothing yet"
-        share_status.set_markup(grey(f"Saved {path.name} ({held}) in {path.parent}. Send it to your friends."))
+        last_export[:] = [path]
+        where = "your Documents, in Stellaris Flag Packs" if path.parent == packs_dir() else str(path.parent)
+        export_status.set_markup(grey(f"Saved {path.name} ({counts_text(counts)}) to {where}. "
+                                      "Send that file to your friends."))
+        open_folder_btn.show()
 
-    def on_import(_):
-        dialog = pack_chooser("Open a flag pack", Gtk.FileChooserAction.OPEN, "_Open")
+    def on_save_as(_):
+        dialog = pack_chooser("Save flag pack", Gtk.FileChooserAction.SAVE, "_Save", packs_dir())
+        dialog.set_do_overwrite_confirmation(True)
+        dialog.set_current_name(new_pack_path(pack_name.get_text()).name)
         path = Path(dialog.get_filename()) if dialog.run() == Gtk.ResponseType.OK else None
         dialog.destroy()
-        if not path:
-            return
+        if path:
+            do_export(path)
+
+    def on_open_folder(_):
+        path = last_export[0]
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer", f"/select,{path}"])
+            else:
+                Gtk.show_uri_on_window(win, path.parent.as_uri(), Gdk.CURRENT_TIME)
+        except Exception as e:
+            export_status.set_markup(red(f"Couldn't open the folder: {e}"))
+
+    pick_all.connect("clicked", lambda _: set_all(True))
+    pick_none.connect("clicked", lambda _: set_all(False))
+    export_btn.connect("clicked", lambda _: do_export(new_pack_path(pack_name.get_text())))
+    save_as_btn.connect("clicked", on_save_as)
+    open_folder_btn.connect("clicked", on_open_folder)
+
+    # Import: the packs found in the Flag Packs folder, Downloads and Desktop.
+    import_view = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    share_stack.add_named(import_view, "import")
+    found_label = share_label()
+    import_view.pack_start(found_label, False, False, 0)
+    pack_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
+    import_view.pack_start(panel(pack_list, 200), True, True, 0)
+    import_row = Gtk.Box(spacing=10)
+    import_pack_btn = styled(Gtk.Button(label="Import Pack"), "sw-btn")
+    browse_btn = styled(Gtk.Button(label="Browse...", tooltip_text="Find a pack saved somewhere else"), "sw-btn")
+    import_row.pack_start(import_pack_btn, False, False, 0)
+    import_row.pack_end(browse_btn, False, False, 0)
+    import_view.pack_start(import_row, False, False, 0)
+    import_status = share_label()
+    import_view.pack_start(import_status, False, False, 0)
+    found = []
+
+    def fill_packs(select=None):
+        for child in pack_list.get_children():
+            pack_list.remove(child)
+        found[:] = find_packs()
+        for path, where, peek in found:
+            row = Gtk.Box(spacing=12, margin=4)
+            text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            text.pack_start(styled(Gtk.Label(label=peek["name"], xalign=0, ellipsize=Pango.EllipsizeMode.END), "sw-name"), False, False, 0)
+            details = f'{counts_text(peek["counts"])}  ·  {where}  ·  {path.name}'
+            if peek["newer"]:
+                details += "  ·  made by a newer version of the app"
+            text.pack_start(share_label(grey(details)), False, False, 0)
+            row.pack_start(text, True, True, 0)
+            strip = Gtk.Box(spacing=3, valign=Gtk.Align.CENTER)
+            for png, fit in peek["thumbs"][:5]:
+                try:
+                    im = square(Image.open(io.BytesIO(png)).convert("RGBA"), 36 * scale, fit)
+                except Exception:
+                    continue
+                thumb = Gtk.Image()
+                show_image(thumb, im)
+                strip.pack_start(thumb, False, False, 0)
+            row.pack_end(strip, False, False, 0)
+            pack_list.add(row)
+        pack_list.show_all()
+        places = "your Flag Packs folder, Downloads or Desktop"
+        found_label.set_markup(grey(f"Packs in {places}, newest first. Pick one and click Import Pack.") if found else
+                               grey(f"No flag packs in {places} yet. When a friend sends you one, save it there "
+                                    "(Discord saves to Downloads), or click Browse to find it."))
+        index = next((i for i, f in enumerate(found) if f[0] == select), 0)
+        if found:
+            pack_list.select_row(pack_list.get_row_at_index(index))
+        import_pack_btn.set_sensitive(bool(found))
+
+    def do_import(path):
         try:
             pack, files = read_pack(path)
             plan = pack_plan(pack, files)
         except Exception as e:
-            share_status.set_markup(f"<span foreground='{RED}'>Couldn't open {GLib.markup_escape_text(path.name)}: "
-                                    f"{GLib.markup_escape_text(str(e))}</span>")
+            import_status.set_markup(red(f"Couldn't open {path.name}: {e}"))
             return
 
         def amount(kind, what):
@@ -1711,9 +1986,10 @@ def build_window():
                     + [f"colour {mine.get(k, k)}" for k in plan["colours"]["replace"]]
                     + [f"design {Path(n).stem}" for n in plan["designs"]["replace"]])
         skipped = len(plan["colours"]["skipped"])
+        title = pack.get("name") if isinstance(pack.get("name"), str) and pack["name"].strip() else path.name
         if not adds and not replaced:
-            share_status.set_markup(grey(f"You already have everything in {path.name}."
-                                         + (f" No room for {skipped} of its colours." if skipped else "")))
+            import_status.set_markup(grey(f"You already have everything in {title}."
+                                          + (f" No room for {skipped} of its colours." if skipped else "")))
             return
         text = []
         if adds:
@@ -1724,26 +2000,57 @@ def build_window():
         if skipped:
             text.append(f"No room for {skipped} of its colours: the game fits {MAX_COLOURS} of yours. "
                         "Remove some on the Colours tab, then import again.")
-        if not flag_studio.ask(ui, f"Import {path.name}?", "\n\n".join(text), "Import"):
+        if not flag_studio.ask(ui, f"Import {title}?", "\n\n".join(text), "Import"):
             return
         try:
             import_pack(pack, files, plan, game)
         except Exception as e:
-            share_status.set_markup(f"<span foreground='{RED}'>Couldn't import the pack: {GLib.markup_escape_text(str(e))}</span>")
+            import_status.set_markup(red(f"Couldn't import the pack: {e}"))
             return
         rebuild(select=selected())
         rebuild_colours()
         for editor in maker.editors.values():
             editor.fill_projects(editor.project.get("id"))
-        done = f"Imported {path.name}. Its emblems are under Custom in the flag editor."
+        done = f"Imported {title}. Its emblems are under Custom in the flag editor."
         if game_running():
             done += " Restart Stellaris to see them."
-        share_status.set_markup(grey(done))
+        import_status.set_markup(grey(done))
 
-    export_btn.connect("clicked", on_export)
-    import_btn.connect("clicked", on_import)
+    def on_import(_):
+        row = pack_list.get_selected_row()
+        if row:
+            do_import(found[row.get_index()][0])
+
+    def on_browse(_):
+        dialog = pack_chooser("Open a flag pack", Gtk.FileChooserAction.OPEN, "_Open", Path.home() / "Downloads")
+        path = Path(dialog.get_filename()) if dialog.run() == Gtk.ResponseType.OK else None
+        dialog.destroy()
+        if path:
+            do_import(path)
+
+    pack_list.connect("row-activated", lambda *_: on_import(None))
+    import_pack_btn.connect("clicked", on_import)
+    browse_btn.connect("clicked", on_browse)
+
+    share_toggles, share_busy = {}, [False]
+
+    def show_share(mode):
+        share_busy[0] = True
+        for name, toggle in share_toggles.items():
+            toggle.set_active(name == mode)
+        share_busy[0] = False
+        share_stack.set_visible_child_name(mode)
+        fill_picks() if mode == "export" else fill_packs()
+
+    for mode, label in (("export", "Export"), ("import", "Import")):
+        toggle = styled(Gtk.ToggleButton(label=label), "sw-btn", "sw-small", "sw-tab")
+        toggle.connect("toggled", lambda t, m=mode: None if share_busy[0] else show_share(m))
+        share_modes.pack_start(toggle, False, False, 0)
+        share_toggles[mode] = toggle
+    show_share("export")
     # Tabs pick up what the others changed (uploads, colours, saved designs) when shown.
-    refreshers = {"emblems": lambda: rebuild(select=selected()), "maker": maker.refresh, "designer": designer.refresh}
+    refreshers = {"emblems": lambda: rebuild(select=selected()), "maker": maker.refresh, "designer": designer.refresh,
+                  "share": lambda: show_share(share_stack.get_visible_child_name() or "export")}
     stack.connect("notify::visible-child-name", lambda s, _: refreshers.get(s.get_visible_child_name(), lambda: None)())
 
     tab_buttons = {}
