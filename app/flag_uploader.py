@@ -15,6 +15,8 @@ exact colours to the game's flag, map and ship colour pickers.
   flag_uploader.py --list                list uploaded emblems
   flag_uploader.py --remove NAME         remove one
   flag_uploader.py --check               show where it finds the game and the mod
+  flag_uploader.py --export-pack F.zip   save everything you made to a flag pack for friends
+  flag_uploader.py --import-pack F.zip   add a friend's flag pack
 
 Originals are kept in uploads/ so Fill/Fit and the map style can be changed later. The window
 borrows its look (textures, fonts, flag shape) from your Stellaris install.
@@ -28,11 +30,13 @@ import json
 import math
 import os
 import re
+import secrets
 import string
 import struct
 import subprocess
 import sys
 import types
+import zipfile
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageOps
@@ -641,12 +645,13 @@ def save_colours(colours):
 
 
 def new_colour_key(colours):
-    """Keys are what saves store, so they stay fixed when a colour is renamed."""
+    """Keys are what saves store, so they stay fixed when a colour is renamed. Random, so
+    colours shared in flag packs don't collide with other players' (older ones are cf_custom_N)."""
     used = {c["key"] for c in colours}
-    n = 1
-    while f"cf_custom_{n}" in used:
-        n += 1
-    return f"cf_custom_{n}"
+    while True:
+        key = f"cf_{secrets.token_hex(4)}"
+        if key not in used:
+            return key
 
 
 def gui_block(text, kind, name):
@@ -717,6 +722,139 @@ def write_colour_files(game):
     COLOURS_LOC.write_text(loc, encoding="utf-8")
     COLOURS_GUI.parent.mkdir(parents=True, exist_ok=True)
     COLOURS_GUI.write_text(gui, encoding="utf-8")
+
+
+# --- flag packs: everything you made, in one zip to share with friends. The game finds
+# emblems, backgrounds and colours by name, so a pack keeps every name as it is: in
+# multiplayer each player sees an empire's flag only if their own copy has the same names.
+
+PACK_FORMAT = 1
+BACKGROUNDS = MOD / "flags" / "backgrounds"
+DESIGNS = MOD / "maker"  # the Maker's projects (flag_studio.py)
+PACK_KINDS = ("emblems", "backgrounds", "colours", "designs")
+SAFE_NAME = re.compile(r"[a-z0-9_]{1,80}")
+MAX_PACK_FILE = 64 << 20  # bytes; anything bigger isn't from this app
+
+
+def export_pack(path):
+    """Write all your emblems, backgrounds, colours and Maker designs to a zip.
+    Returns how many of each it holds."""
+    manifest = load_manifest()
+    emblems = {name: settings(info) for name, info in manifest.items() if source(name).exists()}
+    backgrounds = sorted(p.stem for p in BACKGROUNDS.glob("*.dds")) if BACKGROUNDS.is_dir() else []
+    designs = sorted(p.name for p in DESIGNS.glob("*.json")) if DESIGNS.is_dir() else []
+    pack = {"format": PACK_FORMAT, "made_with": "Stellaris Flag Uploader", "emblems": emblems,
+            "backgrounds": backgrounds, "colours": load_colours(), "designs": designs}
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("pack.json", json.dumps(pack, indent=1))
+        for name in emblems:
+            z.write(source(name), f"emblems/{name}.png")
+        for name in backgrounds:
+            z.write(BACKGROUNDS / f"{name}.dds", f"backgrounds/{name}.dds")
+        for name in designs:
+            z.write(DESIGNS / name, f"designs/{name}")
+    return {kind: len(pack[kind]) for kind in PACK_KINDS}
+
+
+def read_pack(path):
+    """Open a pack and check it: (pack.json contents, its files by name). Raises ValueError
+    for anything that isn't a pack from this app; reads only the files pack.json lists."""
+    try:
+        z = zipfile.ZipFile(path)
+    except (OSError, zipfile.BadZipFile) as e:
+        raise ValueError("this isn't a flag pack (not a zip file)") from e
+    with z:
+        def read(member):
+            try:
+                info = z.getinfo(member)
+            except KeyError:
+                raise ValueError(f"the pack is missing {member}") from None
+            if info.file_size > MAX_PACK_FILE:
+                raise ValueError(f"{member} in the pack is too big")
+            return z.read(info)
+        try:
+            pack = json.loads(read("pack.json"))
+        except ValueError as e:
+            raise ValueError(f"this isn't a flag pack ({e})") from e
+        if not isinstance(pack, dict) or not isinstance(pack.get("format"), int):
+            raise ValueError("this isn't a flag pack")
+        if pack["format"] > PACK_FORMAT:
+            raise ValueError("this pack was made by a newer version of the app; update it to import the pack")
+        emblems, backgrounds = pack.get("emblems") or {}, pack.get("backgrounds") or []
+        colours, designs = pack.get("colours") or [], pack.get("designs") or []
+        design_name = re.compile(r"(background|emblem)_[a-z0-9_]{1,80}\.json")
+        if (not isinstance(emblems, dict) or not all(SAFE_NAME.fullmatch(n) and isinstance(i, dict) for n, i in emblems.items())
+                or not all(isinstance(n, str) and SAFE_NAME.fullmatch(n) for n in backgrounds)
+                or not all(isinstance(n, str) and design_name.fullmatch(n) for n in designs)
+                or not all(isinstance(c, dict) and isinstance(c.get("key"), str) and SAFE_NAME.fullmatch(c["key"])
+                           and isinstance(c.get("name"), str) and parse_colour_code(",".join(map(str, c.get("rgb") or []))) for c in colours)):
+            raise ValueError("the pack's list of contents is damaged")
+        files = {}
+        for name in emblems:
+            files[f"emblems/{name}.png"] = read(f"emblems/{name}.png")
+        for name in backgrounds:
+            files[f"backgrounds/{name}.dds"] = read(f"backgrounds/{name}.dds")
+        for name in designs:
+            files[f"designs/{name}"] = read(f"designs/{name}")
+    pack.update(emblems={n: settings(i) for n, i in emblems.items()}, backgrounds=backgrounds, designs=designs,
+                colours=[{"key": c["key"], "name": c["name"][:40], "rgb": parse_colour_code(",".join(map(str, c["rgb"])))}
+                         for c in colours])
+    return pack, files
+
+
+def pack_plan(pack, files):
+    """What importing would do: for each kind, the names it "add"s, "replace"s (you have
+    one by that name that's different) or leaves as they are ("same"), plus colours
+    "skipped" because the game has room for only MAX_COLOURS of yours."""
+    plan = {kind: {"add": [], "replace": [], "same": []} for kind in PACK_KINDS}
+    manifest = load_manifest()
+
+    def sort(kind, name, mine, theirs):
+        plan[kind]["add" if mine is None else "same" if mine == theirs else "replace"].append(name)
+
+    for name, info in pack["emblems"].items():
+        mine = source(name).read_bytes() if name in manifest and source(name).exists() else None
+        sort("emblems", name, mine and (mine, settings(manifest[name])), (files[f"emblems/{name}.png"], info))
+    for name in pack["backgrounds"]:
+        mine = BACKGROUNDS / f"{name}.dds"
+        sort("backgrounds", name, mine.read_bytes() if mine.exists() else None, files[f"backgrounds/{name}.dds"])
+    for name in pack["designs"]:
+        mine = DESIGNS / name
+        sort("designs", name, mine.read_bytes() if mine.exists() else None, files[f"designs/{name}"])
+    mine = {c["key"]: c for c in load_colours()}
+    room = MAX_COLOURS - len(mine)
+    plan["colours"]["skipped"] = []
+    for c in pack["colours"]:
+        if c["key"] not in mine and room <= 0:
+            plan["colours"]["skipped"].append(c["key"])
+            continue
+        room -= c["key"] not in mine
+        sort("colours", c["key"], mine.get(c["key"]) and (mine[c["key"]]["name"], list(mine[c["key"]]["rgb"])), (c["name"], c["rgb"]))
+    return plan
+
+
+def import_pack(pack, files, plan, game):
+    """Add a pack's emblems, backgrounds, colours and designs (as worked out by pack_plan)."""
+    manifest = load_manifest()
+    UPLOADS.mkdir(parents=True, exist_ok=True)
+    for name in plan["emblems"]["add"] + plan["emblems"]["replace"]:
+        source(name).write_bytes(files[f"emblems/{name}.png"])
+        manifest[name] = pack["emblems"][name]
+        render(name, **manifest[name])
+    save_manifest(manifest)
+    for name in plan["backgrounds"]["add"] + plan["backgrounds"]["replace"]:
+        write_if_changed(BACKGROUNDS / f"{name}.dds", files[f"backgrounds/{name}.dds"])
+    for name in plan["designs"]["add"] + plan["designs"]["replace"]:
+        write_if_changed(DESIGNS / name, files[f"designs/{name}"])
+    wanted = set(plan["colours"]["add"] + plan["colours"]["replace"])
+    if wanted:
+        colours = load_colours()
+        theirs = {c["key"]: c for c in pack["colours"]}
+        colours = [theirs.get(c["key"], c) for c in colours] + [theirs[k] for k in plan["colours"]["add"]]
+        save_colours(colours)
+        write_colour_files(game)
+    if plan["emblems"]["add"] or plan["emblems"]["replace"]:
+        write_flag_shader(game)
 
 
 @functools.lru_cache(maxsize=8)
@@ -1486,6 +1624,124 @@ def build_window():
     stack.add_named(maker.widget, "maker")
     stack.add_named(designer.widget, "designer")
     win.studio = types.SimpleNamespace(designer=designer, maker=maker)  # handle for scripted tests
+
+    # Share page: flag packs, so friends (and multiplayer groups) get the same pictures.
+    share_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14, margin_top=6)
+    stack.add_named(share_page, "share")
+
+    def grey(text):
+        return f"<span foreground='{GREY}'>{GLib.markup_escape_text(text)}</span>"
+
+    def share_label(markup, cls=None):
+        label = Gtk.Label(xalign=0, wrap=True, max_width_chars=70, use_markup=True)
+        label.set_markup(markup)
+        return styled(label, cls) if cls else label
+
+    share_page.pack_start(share_label(GLib.markup_escape_text("Flag packs"), "sw-name"), False, False, 0)
+    share_page.pack_start(share_label(grey(
+        "Playing multiplayer? Stellaris never sends pictures to other players, so everyone needs the same ones "
+        "to see each other's flags. Export a pack, send it to your friends (Discord, email, a USB stick), and "
+        "have them import it here.")), False, False, 0)
+    share_actions = Gtk.Grid(row_spacing=12, column_spacing=16)
+    export_btn = styled(Gtk.Button(label="Export Pack"), "sw-btn")
+    import_btn = styled(Gtk.Button(label="Import Pack"), "sw-btn")
+    share_actions.attach(export_btn, 0, 0, 1, 1)
+    share_actions.attach(share_label(grey("Saves all your emblems, backgrounds, colours and Maker designs to one .zip file.")), 1, 0, 1, 1)
+    share_actions.attach(import_btn, 0, 1, 1, 1)
+    share_actions.attach(share_label(grey("Adds a friend's pack. It shows what will change before replacing anything of yours.")), 1, 1, 1, 1)
+    share_page.pack_start(share_actions, False, False, 0)
+    share_page.pack_start(share_label(
+        grey("Whole group: ") + f"<span foreground='{YELLOW}'>one player imports everyone's packs, then exports one pack "
+        "for everybody</span>" + grey(". Everyone then has every flag.")), False, False, 0)
+    share_status = share_label("")
+    share_page.pack_start(share_status, False, False, 0)
+
+    def pack_chooser(title, action, button):
+        dialog = Gtk.FileChooserDialog(title=title, parent=win, action=action)
+        dialog.add_buttons("_Cancel", Gtk.ResponseType.CANCEL, button, Gtk.ResponseType.OK)
+        zips = Gtk.FileFilter()
+        zips.set_name("Flag packs (.zip)")
+        zips.add_pattern("*.zip")
+        zips.add_pattern("*.ZIP")
+        dialog.add_filter(zips)
+        folder = next((p for p in (Path.home() / "Desktop", Path.home() / "Downloads", Path.home()) if p.is_dir()), None)
+        if folder:
+            dialog.set_current_folder(str(folder))
+        return dialog
+
+    def on_export(_):
+        dialog = pack_chooser("Save flag pack", Gtk.FileChooserAction.SAVE, "_Save")
+        dialog.set_do_overwrite_confirmation(True)
+        dialog.set_current_name("Custom Flags pack.zip")
+        path = Path(dialog.get_filename()) if dialog.run() == Gtk.ResponseType.OK else None
+        dialog.destroy()
+        if not path:
+            return
+        if path.suffix.lower() != ".zip":
+            path = path.with_name(path.name + ".zip")
+        try:
+            counts = export_pack(path)
+        except Exception as e:
+            share_status.set_markup(f"<span foreground='{RED}'>Couldn't save the pack: {GLib.markup_escape_text(str(e))}</span>")
+            return
+        held = ", ".join(f"{n} {kind[:-1] if n == 1 else kind}" for kind, n in counts.items() if n) or "nothing yet"
+        share_status.set_markup(grey(f"Saved {path.name} ({held}) in {path.parent}. Send it to your friends."))
+
+    def on_import(_):
+        dialog = pack_chooser("Open a flag pack", Gtk.FileChooserAction.OPEN, "_Open")
+        path = Path(dialog.get_filename()) if dialog.run() == Gtk.ResponseType.OK else None
+        dialog.destroy()
+        if not path:
+            return
+        try:
+            pack, files = read_pack(path)
+            plan = pack_plan(pack, files)
+        except Exception as e:
+            share_status.set_markup(f"<span foreground='{RED}'>Couldn't open {GLib.markup_escape_text(path.name)}: "
+                                    f"{GLib.markup_escape_text(str(e))}</span>")
+            return
+
+        def amount(kind, what):
+            n = len(plan[kind][what])
+            return f"{n} {kind[:-1] if n == 1 else kind}" if n else None
+        adds = [a for a in (amount(kind, "add") for kind in PACK_KINDS) if a]
+        mine = {c["key"]: c["name"] for c in load_colours()}
+        replaced = ([f"emblem {n}" for n in plan["emblems"]["replace"]]
+                    + [f"background {n}" for n in plan["backgrounds"]["replace"]]
+                    + [f"colour {mine.get(k, k)}" for k in plan["colours"]["replace"]]
+                    + [f"design {Path(n).stem}" for n in plan["designs"]["replace"]])
+        skipped = len(plan["colours"]["skipped"])
+        if not adds and not replaced:
+            share_status.set_markup(grey(f"You already have everything in {path.name}."
+                                         + (f" No room for {skipped} of its colours." if skipped else "")))
+            return
+        text = []
+        if adds:
+            text.append("Adds " + ", ".join(adds) + ".")
+        if replaced:
+            text.append("Replaces yours with the same name: " + ", ".join(replaced)
+                        + ". Your versions are overwritten, so everyone's match in multiplayer.")
+        if skipped:
+            text.append(f"No room for {skipped} of its colours: the game fits {MAX_COLOURS} of yours. "
+                        "Remove some on the Colours tab, then import again.")
+        if not flag_studio.ask(ui, f"Import {path.name}?", "\n\n".join(text), "Import"):
+            return
+        try:
+            import_pack(pack, files, plan, game)
+        except Exception as e:
+            share_status.set_markup(f"<span foreground='{RED}'>Couldn't import the pack: {GLib.markup_escape_text(str(e))}</span>")
+            return
+        rebuild(select=selected())
+        rebuild_colours()
+        for editor in maker.editors.values():
+            editor.fill_projects(editor.project.get("id"))
+        done = f"Imported {path.name}. Its emblems are under Custom in the flag editor."
+        if game_running():
+            done += " Restart Stellaris to see them."
+        share_status.set_markup(grey(done))
+
+    export_btn.connect("clicked", on_export)
+    import_btn.connect("clicked", on_import)
     # Tabs pick up what the others changed (uploads, colours, saved designs) when shown.
     refreshers = {"emblems": lambda: rebuild(select=selected()), "maker": maker.refresh, "designer": designer.refresh}
     stack.connect("notify::visible-child-name", lambda s, _: refreshers.get(s.get_visible_child_name(), lambda: None)())
@@ -1503,7 +1759,8 @@ def build_window():
         switching = False
         stack.set_visible_child_name(page)
 
-    for page, label in (("emblems", "Emblems"), ("colours", "Colours"), ("maker", "Maker"), ("designer", "Designer")):
+    for page, label in (("emblems", "Emblems"), ("colours", "Colours"), ("maker", "Maker"), ("designer", "Designer"),
+                        ("share", "Share")):
         tab = styled(Gtk.ToggleButton(label=label), "sw-btn", "sw-tab")
         tab.connect("clicked", lambda _, p=page: switch(p))
         tabs.pack_start(tab, False, False, 0)
@@ -1518,6 +1775,9 @@ def main():
     action.add_argument("--upload", type=Path, nargs="+", metavar="IMAGE", help="add images as new emblems")
     action.add_argument("--remove", metavar="NAME", help="remove an uploaded emblem")
     action.add_argument("--list", action="store_true", help="list uploaded emblems")
+    action.add_argument("--export-pack", type=Path, metavar="ZIP", help="save everything you made to a flag pack")
+    action.add_argument("--import-pack", type=Path, metavar="ZIP", help="add a flag pack's emblems, backgrounds, "
+                        "colours and designs (replacing yours with the same names)")
     action.add_argument("--check", action="store_true", help="show where the game and the mod are")
     action.add_argument("--self-test", action="store_true", help="open every tab and close again (checks a build starts)")
     ap.add_argument("--fit", action="store_true", help="with --upload: pad to a square instead of cropping")
@@ -1546,6 +1806,23 @@ def main():
     if args.upload:
         for path in args.upload:
             print(f"Added {path.name} as {upload(path, args.fit, False if args.colour_map else None)}")
+        if game_running():
+            print("Restart Stellaris to see the change.")
+    elif args.export_pack:
+        counts = export_pack(args.export_pack)
+        print(f"Saved {args.export_pack}: " + ", ".join(f"{n} {kind}" for kind, n in counts.items()))
+    elif args.import_pack:
+        try:
+            pack, files = read_pack(args.import_pack)
+        except ValueError as e:
+            sys.exit(f"Couldn't import {args.import_pack.name}: {e}")
+        plan = pack_plan(pack, files)
+        import_pack(pack, files, plan, game)
+        for kind in PACK_KINDS:
+            for what in ("add", "replace", "skipped"):
+                if plan[kind].get(what):
+                    print(f"{kind}, {'added' if what == 'add' else 'replaced' if what == 'replace' else 'no room for'}: "
+                          + ", ".join(plan[kind][what]))
         if game_running():
             print("Restart Stellaris to see the change.")
     elif args.remove:

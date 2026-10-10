@@ -35,6 +35,9 @@ Also on the **[Steam Workshop](https://steamcommunity.com/sharedfiles/filedetail
   way Stellaris draws them, and see exactly what to pick in game.
 - **Galaxy map emblems** are handled for you: logos show as clean white
   silhouettes like the game's own, photos in colour (you can switch).
+- **Flag packs for friends and multiplayer**: the Share tab saves everything you
+  made (emblems, backgrounds, colours, designs) to one .zip, and imports a
+  friend's. Before replacing anything of yours, it shows what will change.
 - **Easier emblem picking**: the game's emblem picker gets a lighter slot
   background, so dark emblems don't disappear on black.
 
@@ -83,8 +86,10 @@ playset; repeat step 4.
 ## Questions
 
 **Does it work in multiplayer?** Yes, it doesn't change the game's checksum.
-But the game never sends images to other players, so only players who also
-have the mod (with the same images) see your custom flag.
+But the game never sends images to other players, so only players who have the
+same images see your custom flag. Use the **Share** tab: export a flag pack and
+have your friends import it. For a whole group, one player imports everyone's
+packs and exports one pack for everybody.
 
 **Achievements and Ironman?** It only changes graphics and interface files,
 which aren't part of the game's checksum, so it should stay
@@ -116,6 +121,7 @@ Run from source with Python 3, PyGObject (GTK 3), pycairo and Pillow
 
     python3 app/flag_uploader.py            # the app
     python3 app/flag_uploader.py --check    # where it finds the game and the mod
+    python3 app/flag_uploader.py --export-pack pack.zip   # or --import-pack pack.zip
 
 Set `CUSTOM_FLAGS_MOD=/some/folder` to work on a test mod instead of the real one.
 
