@@ -36,6 +36,7 @@ import string
 import struct
 import subprocess
 import sys
+import threading
 import types
 import zipfile
 from pathlib import Path
@@ -44,6 +45,8 @@ from PIL import Image, ImageChops, ImageDraw, ImageOps
 
 APP = Path(__file__).resolve().parent
 MOD_NAME = "custom_flags"
+APP_VERSION = "1.1.0"  # bump for each release; the Windows build refuses a tag that doesn't match
+REPO = "idiotgamster420/stellaris-custom-flags"
 
 
 def windows_documents():
@@ -517,6 +520,27 @@ the flag editor. Restart Stellaris after changing anything.
 
 Your pictures are kept in uploads/, your designs in maker/ and colours.json.
 """
+
+
+def version_tuple(text):
+    return tuple(int(n) for n in re.findall(r"\d+", text)[:3])
+
+
+def newer_release():
+    """(version, release page) if GitHub has a newer release than this app, else None.
+    Asks GitHub's API once; offline or any error just means no notice."""
+    try:
+        import urllib.request
+        request = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/latest",
+                                         headers={"User-Agent": "stellaris-flag-uploader", "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(request, timeout=8) as response:
+            latest = json.load(response)
+        tag, url = latest["tag_name"], latest["html_url"]
+        if version_tuple(tag) > version_tuple(APP_VERSION) and url.startswith(f"https://github.com/{REPO}/releases/"):
+            return tag.lstrip("v"), url
+    except Exception:
+        pass
+    return None
 
 
 def write_if_changed(path, data):
@@ -1293,6 +1317,23 @@ def build_window():
     close.connect("clicked", lambda _: win.destroy())
     close.set_no_show_all(not themed)
     header.pack_end(close, False, False, 0)
+    update_notice = Gtk.Label(use_markup=True, valign=Gtk.Align.START, margin_top=8, no_show_all=True)
+    header.pack_end(update_notice, False, False, 0)
+
+    def show_update(found):
+        version, url = found
+        update_notice.set_markup(f"<a href='{GLib.markup_escape_text(url)}'><span foreground='{YELLOW}'>"
+                                 f"Version {GLib.markup_escape_text(version)} is out. Download it</span></a>")
+        update_notice.set_tooltip_text("Opens the download page. Install it over this one; your flags stay.")
+        update_notice.show()
+
+    def open_link(_, uri):
+        if sys.platform == "win32":  # GTK can't always open web links on Windows
+            os.startfile(uri)
+            return True
+        return False
+    update_notice.connect("activate-link", open_link)
+    threading.Thread(target=lambda: (found := newer_release()) and GLib.idle_add(show_update, found), daemon=True).start()
     header_events.add(header)
     root.pack_start(header_events, False, False, 0)
 
@@ -2209,6 +2250,8 @@ def main():
         except Exception as e:
             print(f"GTK unavailable: {e}")
         print(f"Stellaris: {game or 'not found'}\nMod folder: {MOD}")
+        found = newer_release()
+        print(f"App version {APP_VERSION}; " + (f"version {found[0]} is out: {found[1]}" if found else "no newer release found (or offline)"))
         return
     ensure_mod(game)
 

@@ -42,6 +42,12 @@ jobs:
             mingw-w64-ucrt-x86_64-adwaita-icon-theme
             mingw-w64-ucrt-x86_64-pyinstaller
 
+      - name: Check the app's version matches the tag
+        if: github.ref_type == 'tag'
+        run: |
+          grep -q "^APP_VERSION = \"${GITHUB_REF_NAME#v}\"" app/flag_uploader.py || {
+            echo "APP_VERSION in app/flag_uploader.py doesn't match the tag $GITHUB_REF_NAME; bump it first"; exit 1; }
+
       - name: Check the app starts (from source)
         timeout-minutes: 5
         run: |

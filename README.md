@@ -100,6 +100,11 @@ textures, fonts, the flag frame, the parts of the mod built from the game's
 shader and interface files) is read from your own installed game when the app
 runs. The screenshots show the app with Stellaris installed.
 
+**Does it update itself?** No, but when a newer version is out, the app shows
+"Version X is out. Download it" at the top. To check, it asks GitHub for the latest release
+when it opens, and sends nothing about you. Install the new version over the old one;
+your flags stay.
+
 **Which systems?** Windows 10 and 11 (64-bit), and Linux distros from late
 2023 onward (glibc 2.38+): Ubuntu 24.04, Linux Mint 22, Fedora 39, Debian 13,
 Arch and newer. Stellaris must be installed with Steam.
@@ -112,6 +117,8 @@ Arch and newer. Stellaris must be installed with Steam.
 - `packaging/linux/`: AppImage build script, launcher, desktop entry
 - `packaging/workshop/`: builds the Steam Workshop showcase mod (`build_workshop.py`)
   and its page text (`description.bbcode`)
+- Releasing: bump `APP_VERSION` in `app/flag_uploader.py`, then push a `v*` tag
+  with the same number (the Windows build refuses a mismatch)
 - `packaging/windows/`: PyInstaller recipe and Inno Setup installer script,
   built by `.github/workflows/windows.yml` on GitHub's Windows machines (for
   every `v*` tag, or by hand from the Actions tab)
