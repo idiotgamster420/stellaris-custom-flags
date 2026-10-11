@@ -526,9 +526,9 @@ def version_tuple(text):
     return tuple(int(n) for n in re.findall(r"\d+", text)[:3])
 
 
-def newer_release():
-    """(version, release page) if GitHub has a newer release than this app, else None.
-    Asks GitHub's API once; offline or any error just means no notice."""
+def latest_release():
+    """(version, release page) of the latest release on GitHub, or None when it can't be
+    reached (offline, or any error)."""
     try:
         import urllib.request
         request = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/latest",
@@ -536,11 +536,17 @@ def newer_release():
         with urllib.request.urlopen(request, timeout=8) as response:
             latest = json.load(response)
         tag, url = latest["tag_name"], latest["html_url"]
-        if version_tuple(tag) > version_tuple(APP_VERSION) and url.startswith(f"https://github.com/{REPO}/releases/"):
+        if url.startswith(f"https://github.com/{REPO}/releases/"):
             return tag.lstrip("v"), url
     except Exception:
         pass
     return None
+
+
+def newer_release():
+    """latest_release() if it's newer than this app, else None."""
+    latest = latest_release()
+    return latest if latest and version_tuple(latest[0]) > version_tuple(APP_VERSION) else None
 
 
 def write_if_changed(path, data):
@@ -2250,8 +2256,8 @@ def main():
         except Exception as e:
             print(f"GTK unavailable: {e}")
         print(f"Stellaris: {game or 'not found'}\nMod folder: {MOD}")
-        found = newer_release()
-        print(f"App version {APP_VERSION}; " + (f"version {found[0]} is out: {found[1]}" if found else "no newer release found (or offline)"))
+        latest = latest_release()
+        print(f"App version {APP_VERSION}; latest release: " + (latest[0] if latest else "couldn't reach GitHub"))
         return
     ensure_mod(game)
 
