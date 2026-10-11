@@ -16,13 +16,21 @@ import importlib.util
 import math
 import os
 import random
+import re
 import shutil
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 NAME = "Custom Flags - Your Own Flags, Emblems & Colours"
+VERSION = "1.1.0"
 TAGS = ["Graphics", "Utilities"]
+LANGUAGES = ["english", "braz_por", "french", "german", "japanese", "korean", "polish", "russian", "simp_chinese", "spanish"]
+NOTICE_LOC = (' CUSTOM_FLAGS_MENU_NOTICE: "§YCustom Flags:§! want your own pictures as flags? Get the free app.'
+              '\\nNew: §YShare§! your flags with friends for multiplayer."\n'
+              ' CUSTOM_FLAGS_MENU_NOTICE_BUTTON: "Get the app"\n'
+              ' CUSTOM_FLAGS_MENU_NOTICE_TOOLTIP: "Opens the download page in your browser. Once the app is installed '
+              'and its §YCustom Flags§! mod is in your playset, this message goes away."\n')
 
 # Example emblems, as Maker layers (shape, colour, x, y, size, rotation).
 EMBLEMS = {
@@ -120,10 +128,14 @@ def main():
         probe = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(probe)
         out = probe.stellaris_user_dir() / "mod" / "custom_flags_workshop"
+    remote_id = ""
     if out.exists():  # only ever replace an earlier build of this
         desc = out / "descriptor.mod"
         if not desc.exists() or NAME not in desc.read_text(encoding="utf-8"):
             sys.exit(f"{out} exists and isn't this Workshop build; not touching it")
+        # The launcher's link to the published item: without it, Upload would make a second Workshop item.
+        found = re.search(r'^remote_file_id="(\d+)"', desc.read_text(encoding="utf-8"), re.M)
+        remote_id = f'remote_file_id="{found.group(1)}"\n' if found else ""
         shutil.rmtree(out)
     core, studio = load_app(out)
     game = core.find_game()
@@ -138,6 +150,11 @@ def main():
     shader, gui = core.slot_files(game)
     core.write_if_changed(out / "gfx/FX/custom_flags_emblem_slot.shader", shader)
     core.write_if_changed(out / "interface/zz_custom_flags.gui", gui)
+    # The main menu's "get the app" notice; the app's own mod hides it again (see core.MENU_GUI).
+    core.write_if_changed(out / "interface/zz_custom_flags_menu.gui", core.menu_gui(game, core.MENU_NOTICE))
+    for language in LANGUAGES:  # English everywhere: a missing translation would show the raw key
+        core.write_if_changed(out / f"localisation/{language}/custom_flags_notice_l_{language}.yml",
+                              f"﻿l_{language}:\n" + NOTICE_LOC)
 
     emblems = {}
     for name, layers in EMBLEMS.items():
@@ -158,10 +175,10 @@ def main():
 
     thumbnail(core, studio, game, emblems, backgrounds).save(out / "thumbnail.png", optimize=True)
     version = core.descriptor(game).split('supported_version="')[1].split('"')[0]
-    descriptor = (f'version="1.0.0"\ntags={{\n' + "".join(f'\t"{t}"\n' for t in TAGS) + "}\n"
+    descriptor = (f'version="{VERSION}"\ntags={{\n' + "".join(f'\t"{t}"\n' for t in TAGS) + "}\n"
                   f'name="{NAME}"\npicture="thumbnail.png"\nsupported_version="{version}"\n')
-    core.write_if_changed(out / "descriptor.mod", descriptor)
-    core.write_if_changed(out.parent / f"{out.name}.mod", descriptor + f'path="{out.as_posix()}"\n')
+    core.write_if_changed(out / "descriptor.mod", descriptor + remote_id)
+    core.write_if_changed(out.parent / f"{out.name}.mod", descriptor + f'path="{out.as_posix()}"\n' + remote_id)
     print(f"Built {out}")
 
 
