@@ -2254,7 +2254,7 @@ def build_window():
     share_page.drag_dest_set(Gtk.DestDefaults.ALL, [], Gdk.DragAction.COPY)
     share_page.drag_dest_add_uri_targets()
     share_page.connect("drag-data-received", lambda w, ctx, x, y, data, info, t: add_dropped(data.get_uris() or []))
-    win.share_drop = add_dropped  # handle for scripted tests
+    win.share_drop, win.show_share = add_dropped, show_share  # handles for scripted tests
     # Tabs pick up what the others changed (uploads, colours, saved designs) when shown.
     refreshers = {"emblems": lambda: rebuild(select=selected()), "maker": maker.refresh, "designer": designer.refresh,
                   "share": lambda: show_share(share_stack.get_visible_child_name() or "export")}
@@ -2280,6 +2280,7 @@ def build_window():
         tabs.pack_start(tab, False, False, 0)
         tab_buttons[page] = tab
     switch("emblems")
+    win.switch_tab = switch  # handle for --self-test
     return win
 
 
@@ -2293,7 +2294,7 @@ def main():
     action.add_argument("--import-pack", type=Path, metavar="ZIP", help="add a flag pack's emblems, backgrounds, "
                         "colours and designs (replacing yours with the same names)")
     action.add_argument("--check", action="store_true", help="show where the game and the mod are")
-    action.add_argument("--self-test", action="store_true", help="open every tab and close again (checks a build starts)")
+    action.add_argument("--self-test", action="store_true", help="open every tab and close again (checks a build starts, times each page)")
     ap.add_argument("--fit", action="store_true", help="with --upload: pad to a square instead of cropping")
     ap.add_argument("--colour-map", action="store_true", help="with --upload: keep colours on the galaxy map")
     args = ap.parse_args()
@@ -2347,10 +2348,25 @@ def main():
         remove(args.remove)
         print(f"Removed {args.remove}")
     elif args.self_test:
+        import time
         win = build_window()
         from gi.repository import GLib, Gtk
         win.show_all()
-        GLib.timeout_add(1500, Gtk.main_quit)
+        steps = [(f"{tab} tab", lambda tab=tab: win.switch_tab(tab)) for tab in ("colours", "maker", "designer", "share")]
+        steps += [("share import", lambda: win.show_share("import")), ("share export", lambda: win.show_share("export"))]
+
+        def step():  # visit every page, so a page that hangs or fails shows up here
+            if not steps:
+                Gtk.main_quit()
+                return False
+            name, show = steps.pop(0)
+            started = time.monotonic()
+            show()
+            while Gtk.events_pending():
+                Gtk.main_iteration()
+            print(f"{name}: {time.monotonic() - started:.2f}s", flush=True)
+            return True
+        GLib.timeout_add(300, step)
         Gtk.main()
         print("self-test ok")
     elif args.list:
