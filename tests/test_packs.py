@@ -47,6 +47,7 @@ def main():
     a.update(a.upload(tmp / "pic.png"), full=True)
     a.upload(tmp / "pic.png", fit=True)
     a.save_colours([{"key": a.new_colour_key([]), "name": "Teal", "rgb": [0, 128, 128]}])
+    a.write_colour_files(a.find_game())
     assert a.export_pack(tmp / "pack.zip", "Test") == {"emblems": 2, "backgrounds": 0, "colours": 1, "designs": 0}
 
     b = core(tmp / "b")
