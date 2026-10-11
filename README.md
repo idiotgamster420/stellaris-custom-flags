@@ -124,6 +124,7 @@ Run from source with Python 3, PyGObject (GTK 3), pycairo and Pillow
     python3 app/flag_uploader.py --export-pack pack.zip   # or --import-pack pack.zip
 
 Set `CUSTOM_FLAGS_MOD=/some/folder` to work on a test mod instead of the real one.
+Check flag packs with `python3 tests/test_packs.py` (needs Stellaris installed).
 
 Build the AppImage with `packaging/linux/build-appimage.sh`. It downloads
 linuxdeploy and its GTK plugin into `build/tools` the first time and bundles the

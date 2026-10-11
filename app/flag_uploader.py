@@ -185,6 +185,17 @@ def source(name):
     return UPLOADS / f"{name}.png"
 
 
+@functools.lru_cache(maxsize=512)
+def _thumb(path, mtime, size, fit):
+    return square(Image.open(path).convert("RGBA"), size, fit)
+
+
+def upload_thumb(name, size, fit):
+    """An upload squared to size, cached until its file changes (originals can be big photos)."""
+    path = source(name)
+    return _thumb(path, path.stat().st_mtime_ns, size, fit)
+
+
 def has_transparency(img):
     """True if the picture itself has see-through areas (a logo rather than a photo)."""
     alpha = img.getchannel("A")
@@ -733,6 +744,7 @@ PACK_FORMAT = 1
 BACKGROUNDS = MOD / "flags" / "backgrounds"
 DESIGNS = MOD / "maker"  # the Maker's projects (flag_studio.py)
 PACK_KINDS = ("emblems", "backgrounds", "colours", "designs")
+PREVIEWS, PREVIEW_PX = 6, 72  # small squared copies of a pack's first emblems, for the Import list
 SAFE_NAME = re.compile(r"[a-z0-9_]{1,80}")
 MAX_PACK_FILE = 64 << 20  # bytes; anything bigger isn't from this app
 
@@ -800,8 +812,12 @@ def export_pack(path, name="My Flags", chosen=None):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("pack.json", json.dumps(pack, indent=1))
-        for name in emblems:
+        for i, name in enumerate(emblems):
             z.write(source(name), f"emblems/{name}.png")
+            if i < PREVIEWS:
+                preview = io.BytesIO()
+                upload_thumb(name, PREVIEW_PX, emblems[name]["fit"]).save(preview, "PNG")
+                z.writestr(f"previews/{name}.png", preview.getvalue())
         for name in backgrounds:
             z.write(BACKGROUNDS / f"{name}.dds", f"backgrounds/{name}.dds")
         for name in designs:
@@ -840,7 +856,8 @@ def read_pack(path):
                 or not all(isinstance(n, str) and SAFE_NAME.fullmatch(n) for n in backgrounds)
                 or not all(isinstance(n, str) and design_name.fullmatch(n) for n in designs)
                 or not all(isinstance(c, dict) and isinstance(c.get("key"), str) and SAFE_NAME.fullmatch(c["key"])
-                           and isinstance(c.get("name"), str) and parse_colour_code(",".join(map(str, c.get("rgb") or []))) for c in colours)):
+                           and isinstance(c.get("name"), str) and is_rgb(c.get("rgb")) for c in colours)
+                or len({c["key"] for c in colours}) != len(colours)):
             raise ValueError("the pack's list of contents is damaged")
         files = {}
         for name in emblems:
@@ -849,24 +866,66 @@ def read_pack(path):
             files[f"backgrounds/{name}.dds"] = read(f"backgrounds/{name}.dds")
         for name in designs:
             files[f"designs/{name}"] = read(f"designs/{name}")
+    # Check every file before anything is written: a bad one would otherwise be half-imported,
+    # or reach the game or the Maker and break them.
+    for member, data in files.items():
+        try:
+            if member.startswith("emblems/"):
+                with Image.open(io.BytesIO(data)) as im:  # also refuses decompression bombs
+                    ok = im.format == "PNG"
+                    im.verify()
+            elif member.startswith("backgrounds/"):
+                with Image.open(io.BytesIO(data)) as im:
+                    ok = im.format == "DDS" and max(im.size) <= 2048
+            else:
+                design = json.loads(data)
+                ok = valid_design(design, member.split("/")[1].split("_")[0])
+        except Exception:
+            ok = False
+        if not ok:
+            raise ValueError(f"{member} in the pack is damaged")
     pack.update(emblems={n: settings(i) for n, i in emblems.items()}, backgrounds=backgrounds, designs=designs,
-                colours=[{"key": c["key"], "name": c["name"][:40], "rgb": parse_colour_code(",".join(map(str, c["rgb"])))}
-                         for c in colours])
+                colours=[{"key": c["key"], "name": c["name"][:40], "rgb": list(c["rgb"])} for c in colours])
     return pack, files
+
+
+def is_rgb(value):
+    return (isinstance(value, list) and len(value) == 3
+            and all(isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 255 for v in value))
+
+
+def valid_design(design, kind):
+    """A Maker design the Maker can open and draw (see flag_studio.Editor)."""
+    def number(v):
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    if not (isinstance(design, dict) and design.get("kind") == kind and isinstance(design.get("name"), str)
+            and isinstance(design.get("id"), str) and SAFE_NAME.fullmatch(design["id"])
+            and isinstance(design.get("layers"), list) and len(design["layers"]) <= 64
+            and (design.get("output") is None or isinstance(design["output"], str) and SAFE_NAME.fullmatch(design["output"]))):
+        return False
+    if kind == "background" and design.get("base") not in ("primary", "secondary", "black"):
+        return False
+    return all(isinstance(layer, dict) and isinstance(layer.get("shape"), str)
+               and all(number(layer.get(k)) for k in ("x", "y", "size", "stretch", "rot", "opacity"))
+               and all(isinstance(layer.get(k), bool) for k in ("flip_x", "flip_y"))
+               and (layer.get("slot") in ("primary", "secondary", "black") if kind == "background" else is_rgb(layer.get("rgb")))
+               for layer in design["layers"])
 
 
 def new_pack_path(name):
     """A free file name for a pack called `name` in the Flag Packs folder."""
     base = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "", name).strip(" .") or "My Flags"
+    if re.fullmatch(r"(?i)(con|prn|aux|nul|com\d|lpt\d)(\..*)?", base):  # names Windows won't create
+        base += " pack"
     path, n = packs_dir() / f"{base}.zip", 2
     while path.exists():
         path, n = packs_dir() / f"{base} ({n}).zip", n + 1
     return path
 
 
-def peek_pack(path, thumbs=6):
+def peek_pack(path):
     """A quick look at a pack for the Share tab's list, or None if it isn't one:
-    {"name", "counts", "thumbs": [(png bytes, fit)]}. Only reads pack.json and a few emblems."""
+    {"name", "counts", "thumbs": [png bytes]}. Only reads pack.json and the small previews."""
     try:
         with zipfile.ZipFile(path) as z:
             info = z.getinfo("pack.json")
@@ -877,10 +936,10 @@ def peek_pack(path, thumbs=6):
                 return None
             emblems = pack.get("emblems") if isinstance(pack.get("emblems"), dict) else {}
             shown = []
-            for name, options in list(emblems.items())[:thumbs]:
-                member = f"emblems/{name}.png"
-                if SAFE_NAME.fullmatch(name) and member in z.namelist() and z.getinfo(member).file_size <= MAX_PACK_FILE:
-                    shown.append((z.read(member), bool(isinstance(options, dict) and options.get("fit"))))
+            for name in list(emblems)[:PREVIEWS]:
+                member = f"previews/{name}.png"
+                if SAFE_NAME.fullmatch(name) and member in z.namelist() and z.getinfo(member).file_size <= 1 << 20:
+                    shown.append(z.read(member))
     except (OSError, KeyError, ValueError, zipfile.BadZipFile):
         return None
     name = pack.get("name") if isinstance(pack.get("name"), str) else ""
@@ -947,6 +1006,8 @@ def pack_plan(pack, files):
 
 def import_pack(pack, files, plan, game):
     """Add a pack's emblems, backgrounds, colours and designs (as worked out by pack_plan)."""
+    if not game:  # colours and full-flag emblems are built from the game; don't half-import
+        raise FileNotFoundError("Stellaris isn't installed where Steam keeps it")
     manifest = load_manifest()
     UPLOADS.mkdir(parents=True, exist_ok=True)
     for name in plan["emblems"]["add"] + plan["emblems"]["replace"]:
@@ -1312,7 +1373,7 @@ def build_window():
             grid.remove(child)
         for name in names:
             thumb = Gtk.Image(tooltip_text=name)
-            show_image(thumb, square(Image.open(source(name)).convert("RGBA"), THUMB_SIZE * scale, manifest[name]["fit"]))
+            show_image(thumb, upload_thumb(name, THUMB_SIZE * scale, manifest[name]["fit"]))
             grid.add(thumb)
         grid.show_all()
         if names:
@@ -1849,7 +1910,7 @@ def build_window():
             for key in contents[kind]:
                 try:
                     if kind == "emblems":
-                        im, tip = square(Image.open(source(key)).convert("RGBA"), size, settings(manifest[key])["fit"]), key
+                        im, tip = upload_thumb(key, size, settings(manifest[key])["fit"]), key
                     elif kind == "backgrounds":
                         channels = open_image(BACKGROUNDS / f"{key}.dds").resize((size, size), Image.LANCZOS)
                         im, tip = flag_studio.colourize(channels, (14, 30, 78), (70, 205, 185)), key
@@ -1952,7 +2013,7 @@ def build_window():
     def fill_packs(select=None):
         for child in pack_list.get_children():
             pack_list.remove(child)
-        found[:] = find_packs()
+        found[:] = find_packs()[:50]
         for path, where, peek in found:
             row = Gtk.Box(spacing=12, margin=4)
             text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -1963,9 +2024,12 @@ def build_window():
             text.pack_start(share_label(grey(details)), False, False, 0)
             row.pack_start(text, True, True, 0)
             strip = Gtk.Box(spacing=3, valign=Gtk.Align.CENTER)
-            for png, fit in peek["thumbs"][:5]:
+            for png in peek["thumbs"][:5]:
                 try:
-                    im = square(Image.open(io.BytesIO(png)).convert("RGBA"), 36 * scale, fit)
+                    im = Image.open(io.BytesIO(png))
+                    if im.size != (PREVIEW_PX, PREVIEW_PX):  # from someone else's file: don't decode anything big
+                        continue
+                    im = im.convert("RGBA").resize((36 * scale, 36 * scale), Image.LANCZOS)
                 except Exception:
                     continue
                 thumb = Gtk.Image()
@@ -2063,7 +2127,9 @@ def build_window():
         toggle.connect("toggled", lambda t, m=mode: None if share_busy[0] else show_share(m))
         share_modes.pack_start(toggle, False, False, 0)
         share_toggles[mode] = toggle
-    show_share("export")
+    share_busy[0] = True
+    share_toggles["export"].set_active(True)  # its tiles are filled when the Share tab is opened
+    share_busy[0] = False
 
     def add_dropped(uris):
         """Files dragged anywhere onto the Share tab: packs are imported, images become emblems."""
