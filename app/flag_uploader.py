@@ -23,6 +23,7 @@ borrows its look (textures, fonts, flag shape) from your Stellaris install.
 """
 import argparse
 import colorsys
+import faulthandler
 import ctypes
 import ctypes.util
 import functools
@@ -45,7 +46,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageOps
 
 APP = Path(__file__).resolve().parent
 MOD_NAME = "custom_flags"
-APP_VERSION = "1.1.1"  # bump for each release; the Windows build refuses a tag that doesn't match
+APP_VERSION = "1.2.0-beta1"  # bump for each release; the Windows build refuses a tag that doesn't match
 REPO = "idiotgamster420/stellaris-custom-flags"
 
 
@@ -2298,7 +2299,20 @@ def main():
     ap.add_argument("--fit", action="store_true", help="with --upload: pad to a square instead of cropping")
     ap.add_argument("--colour-map", action="store_true", help="with --upload: keep colours on the galaxy map")
     args = ap.parse_args()
+    log = None
+    if not any(vars(args).values()):  # opening the window
+        # The Windows app has no console, so errors and hangs would vanish: log them to a file
+        # (send it when reporting a problem). If opening takes over 30 s, it records where it's stuck.
+        CACHE.mkdir(parents=True, exist_ok=True)
+        log = open(CACHE / "log.txt", "w", encoding="utf-8", buffering=1)
+        print(f"Stellaris Flag Uploader {APP_VERSION}, {sys.platform}, Python {sys.version.split()[0]}\nMod folder: {MOD}", file=log)
+        if sys.stderr is None or sys.platform == "win32":
+            sys.stderr = log
+        faulthandler.enable(log)
+        faulthandler.dump_traceback_later(30, file=log)
     game = find_game()
+    if log:
+        print(f"Stellaris: {game or 'not found'}", file=log)
     if args.check:
         import PIL
         print(f"Python {sys.version.split()[0]} at {sys.executable}\nPillow {PIL.__version__} from {Path(PIL.__file__).parent}")
@@ -2376,8 +2390,9 @@ def main():
             print(f"{name}  ({'fit' if info['fit'] else 'fill'}, {'white' if info['white_map'] else 'colour'} on map{whole})")
     else:
         win = build_window()
-        from gi.repository import Gtk
+        from gi.repository import GLib, Gtk
         win.show_all()
+        GLib.idle_add(lambda: faulthandler.cancel_dump_traceback_later() or print("Window shown", file=log))
         Gtk.main()
 
 
