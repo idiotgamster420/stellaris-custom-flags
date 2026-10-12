@@ -550,6 +550,17 @@ def newer_release():
     return latest if latest and version_tuple(latest[0]) > version_tuple(APP_VERSION) else None
 
 
+def startup_report(log_text, limit=900):
+    """A short, shareable report from a log of a start that never showed the window: the
+    header and the app's own lines where it was stuck, under a Steam comment's length limit,
+    with the user's home folder hidden."""
+    lines = log_text.replace(str(Path.home()), "~").splitlines()
+    keep = lines[:3] + [l.strip() for l in lines[3:] if "Error" in l or "Timeout" in l or "Traceback" in l
+                        or "flag_uploader" in l or "flag_studio" in l]
+    report = "Flag Uploader got stuck while opening:\n" + "\n".join(dict.fromkeys(keep))
+    return report if len(report) <= limit else report[:limit - 3] + "..."
+
+
 def write_if_changed(path, data):
     path = Path(path)
     data = data.encode("utf-8") if isinstance(data, str) else data
@@ -2282,6 +2293,16 @@ def build_window():
         tab_buttons[page] = tab
     switch("emblems")
     win.switch_tab = switch  # handle for --self-test
+
+    def offer_report(report):
+        if flag_studio.ask(ui, "The app got stuck last time",
+                           "Last time, the app froze while opening. Click Copy Report, then paste it into a comment "
+                           "on the Custom Flags Workshop page, so it can be fixed.", "Copy Report"):
+            clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+            clipboard.set_text(report, -1)
+            clipboard.store()  # keep it after the app closes
+            status.set_markup(f"<span foreground='{GREY}'>Report copied. Paste it in a Workshop comment. Thanks!</span>")
+    win.offer_report = offer_report
     return win
 
 
@@ -2304,6 +2325,11 @@ def main():
         # The Windows app has no console, so errors and hangs would vanish: log them to a file
         # (send it when reporting a problem). If opening takes over 30 s, it records where it's stuck.
         CACHE.mkdir(parents=True, exist_ok=True)
+        try:  # the last start never got as far as showing the window: offer to report it
+            previous = (CACHE / "log.txt").read_text(encoding="utf-8", errors="replace")
+            stuck = previous if "Window shown" not in previous else None
+        except OSError:
+            stuck = None
         log = open(CACHE / "log.txt", "w", encoding="utf-8", buffering=1)
         print(f"Stellaris Flag Uploader {APP_VERSION}, {sys.platform}, Python {sys.version.split()[0]}\nMod folder: {MOD}", file=log)
         if sys.stderr is None or sys.platform == "win32":
@@ -2393,6 +2419,8 @@ def main():
         from gi.repository import GLib, Gtk
         win.show_all()
         GLib.idle_add(lambda: faulthandler.cancel_dump_traceback_later() or print("Window shown", file=log))
+        if stuck:
+            GLib.idle_add(win.offer_report, startup_report(stuck))
         Gtk.main()
 
 
