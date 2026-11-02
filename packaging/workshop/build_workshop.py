@@ -23,10 +23,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 NAME = "Custom Flags - Your Own Flags, Emblems & Colours"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 TAGS = ["Graphics", "Utilities"]
 LANGUAGES = ["english", "braz_por", "french", "german", "japanese", "korean", "polish", "russian", "simp_chinese", "spanish"]
-NOTICE_LOC = (' CUSTOM_FLAGS_MENU_NOTICE: "§YCustom Flags:§! want your own pictures as flags? Get the free app.'
+NOTICE_LOC = (' CUSTOM_FLAGS_MENU_NOTICE: "§YCustom Flags:§! add your own pictures with the free app.'
               '\\nNew: §YShare§! your flags with friends for multiplayer."\n'
               ' CUSTOM_FLAGS_MENU_NOTICE_BUTTON: "Get the app"\n'
               ' CUSTOM_FLAGS_MENU_NOTICE_TOOLTIP: "Opens the download page in your browser. Once the app is installed '
