@@ -17,7 +17,7 @@ from pathlib import Path
 
 import cairo
 from gi.repository import Gdk, GLib, Gtk, Pango
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageOps
 
 FLAG_HEX = (22, 9, 190, 202)  # bounding box of its hexagon mask
 DESIGN_PREVIEW = 300
@@ -25,6 +25,7 @@ MAKER_CANVAS = 300
 MAKER_PREVIEW = 120
 THUMB = 40
 MAX_LAYERS = 32  # same as Black Ops 2
+SNAP_CELLS = 16  # even, so a grid line runs through the middle of the canvas
 SLOTS = {"primary": "Primary", "secondary": "Secondary", "black": "Black"}
 CHANNELS = {"primary": (255, 0, 0), "secondary": (0, 255, 0), "black": (0, 0, 0)}
 CYAN = (31 / 255, 224 / 255, 202 / 255)
@@ -246,11 +247,32 @@ def slug(text):
 
 # --- the Maker's layers
 
+def is_custom(shape):
+    """A picture the player added, as opposed to a basic shape or a game emblem."""
+    return shape.startswith(("upload:", "emblem:custom_flags/"))
+
+
+def picture_mask(img):
+    """A picture as a background layer's mask, since backgrounds hold only two colours: bright
+    parts take the layer's colour, dark parts show what's below. One-tone pictures (a black
+    logo, say) would vanish or lose nothing by this, so they keep their plain outline."""
+    rgba = img.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    solid = alpha.point(lambda v: 255 if v > 127 else 0)
+    grey = rgba.convert("L")
+    tones = [i for i, n in enumerate(grey.histogram(mask=solid)) if n]
+    if not tones or tones[-1] - tones[0] < 32:
+        return rgba
+    tone = ImageOps.autocontrast(grey, mask=solid)
+    return Image.merge("RGBA", (tone, tone, tone, ImageChops.multiply(alpha, tone)))
+
+
 def new_layer(shape, kind, base):
     layer = {"shape": shape, "x": 0.5, "y": 0.5, "size": 0.5, "stretch": 0.0, "rot": 0.0,
              "flip_x": False, "flip_y": False, "opacity": 1.0}
     if kind == "background":
         layer["slot"] = "secondary" if base == "primary" else "primary"
+        layer["original"] = is_custom(shape)  # here it means "keep the picture's shading"
     else:
         layer["rgb"] = [255, 255, 255]
         layer["original"] = shape not in SHAPES
@@ -315,10 +337,11 @@ def render_project(data, project, size, colour_of):
             except (OSError, ValueError):
                 img = None  # its picture was removed; skip the layer
             if img is not None:
-                source = cairo_surface(img)
+                in_colour = layer.get("original") and project["kind"] != "background"
+                source = cairo_surface(picture_mask(img) if layer.get("original") and not in_colour else img)
                 cr.scale(1 / img.width, 1 / img.height)
                 cr.translate(-img.width / 2, -img.height / 2)
-                if layer.get("original"):
+                if in_colour:
                     cr.set_source_surface(source, 0, 0)
                     cr.paint_with_alpha(layer["opacity"])
                 else:
@@ -329,7 +352,7 @@ def render_project(data, project, size, colour_of):
 
 
 def shape_thumb(data, key, size, rgb=(230, 245, 240)):
-    project = {"kind": "emblem", "layers": [dict(new_layer(key, "emblem", None), size=0.9, rgb=list(rgb), original=False)]}
+    project = {"kind": "emblem", "layers": [dict(new_layer(key, "emblem", None), size=0.9, rgb=list(rgb), original=is_custom(key))]}
     return render_project(data, project, size, lambda layer: tuple(layer["rgb"]))
 
 
@@ -739,6 +762,9 @@ class Editor:
         self.canvas.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON1_MOTION_MASK
                                | Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.SMOOTH_SCROLL_MASK)
         left.pack_start(self.canvas, False, False, 0)
+        self.snap = Gtk.CheckButton(label="Snap to grid", tooltip_text="Dragged layers snap their centre to the grid, for symmetry")
+        self.snap.connect("toggled", lambda _: self.canvas.queue_draw())
+        left.pack_start(self.snap, False, False, 0)
         under = Gtk.Box(spacing=10)
         self.preview = Gtk.Image(tooltip_text="On your Designer flag")
         self.status = Gtk.Label(wrap=True, max_width_chars=22, xalign=0, use_markup=True)
@@ -781,6 +807,10 @@ class Editor:
         if kind == "background":
             self.props.attach(Gtk.Label(label="Colour", xalign=0), 0, row, 1, 1)
             self.props.attach(self.slot_row("layer"), 1, row, 1, 1)
+            row += 1
+            self.original = Gtk.CheckButton(label="Picture detail", no_show_all=True,
+                                            tooltip_text="Keep the picture's light and dark areas, in your flag colours, instead of a plain shape")
+            self.props.attach(self.original, 1, row, 1, 1)
         else:
             self.colour_btn = ui.styled(Gtk.Button(), "sw-btn", "sw-small")
             self.colour_btn.add(Gtk.Image())
@@ -795,7 +825,7 @@ class Editor:
             colour_box.pack_start(self.original, False, False, 0)
             self.props.attach(Gtk.Label(label="Colour", xalign=0), 0, row, 1, 1)
             self.props.attach(colour_box, 1, row, 1, 1)
-            self.original.connect("toggled", lambda b: self.set_prop("original", b.get_active()))
+        self.original.connect("toggled", lambda b: self.set_prop("original", b.get_active()))
         self.sliders = {}
         for label, prop, lo, hi, step in (("Size", "size", 0.02, 1.6, 0.01), ("Stretch", "stretch", -2, 2, 0.01),
                                           ("Rotate", "rot", -180, 180, 1), ("Opacity", "opacity", 0, 1, 0.01)):
@@ -1010,6 +1040,8 @@ class Editor:
                 button.set_active(bool(layer) and layer["slot"] == slot)
             for slot, button in self.slot_buttons["base"].items():
                 button.set_active(self.project["base"] == slot)
+            self.original.set_active(bool(layer and layer.get("original")))
+            self.original.set_visible(bool(layer) and layer["shape"] not in SHAPES)
         else:
             full, cut = self.canvas_options()
             self.full_btn.set_active(full)
@@ -1255,6 +1287,16 @@ class Editor:
             cr.set_source_rgba(*CYAN, 0.5)
             cr.rectangle(sx, sy, ss, ss)
             cr.stroke()
+        if self.snap.get_active():
+            cr.set_dash([])
+            for i in range(1, SNAP_CELLS):
+                at = i * size / SNAP_CELLS
+                cr.set_source_rgba(*CYAN, 0.5 if i * 2 == SNAP_CELLS else 0.13)  # the middle lines stand out
+                cr.move_to(at, 0)
+                cr.line_to(at, size)
+                cr.move_to(0, at)
+                cr.line_to(size, at)
+                cr.stroke()
         layer = self.layer()
         if layer:
             cr.set_dash([5, 3])
@@ -1290,8 +1332,11 @@ class Editor:
         if self.drag and layer and event.state & Gdk.ModifierType.BUTTON1_MASK:
             x0, y0, lx, ly = self.drag
             size = self.canvas_size()
-            layer["x"] = min(max(lx + (event.x - x0) / size, -0.25), 1.25)
-            layer["y"] = min(max(ly + (event.y - y0) / size, -0.25), 1.25)
+            x, y = lx + (event.x - x0) / size, ly + (event.y - y0) / size
+            if self.snap.get_active():
+                x, y = round(x * SNAP_CELLS) / SNAP_CELLS, round(y * SNAP_CELLS) / SNAP_CELLS
+            layer["x"] = min(max(x, -0.25), 1.25)
+            layer["y"] = min(max(y, -0.25), 1.25)
             self.changed()
         return True
 

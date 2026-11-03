@@ -46,7 +46,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageOps
 
 APP = Path(__file__).resolve().parent
 MOD_NAME = "custom_flags"
-APP_VERSION = "1.2.0"  # bump for each release; the Windows build refuses a tag that doesn't match
+APP_VERSION = "1.2.1"  # bump for each release; the Windows build refuses a tag that doesn't match
 REPO = "idiotgamster420/stellaris-custom-flags"
 
 

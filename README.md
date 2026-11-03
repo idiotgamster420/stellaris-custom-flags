@@ -30,6 +30,8 @@ Also on the **[Steam Workshop](https://steamcommunity.com/sharedfiles/filedetail
 - **Flag background maker**: stack shapes in layers (circles, stars, chevrons,
   cogs, any game emblem, your own images), Black Ops 2 emblem editor style.
   Backgrounds follow your empire's colours in game, like the built-in ones.
+  Snap to grid lines up layers for symmetry, and pictures keep their light and
+  dark areas, shown in your two flag colours.
 - **Emblem editor**: the same layer editor for making emblems in any colours.
 - **Flag designer**: try backgrounds, colours and emblems together, drawn the
   way Stellaris draws them, and see exactly what to pick in game.
